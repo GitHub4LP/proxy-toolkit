@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>端口管理服务</title>
+    <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>端口管理服务</h1>
+            <p>智能端口管理和代理链接生成</p>
+        </div>
+        
+        <div class="port-table-container">
+            <table class="port-table">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>端口</th>
+                        <th>URL地址</th>
+                        <th>进程信息</th>
+                        <th>SW</th>
+                    </tr>
+                </thead>
+                <tbody id="portTableBody">
+                    <!-- 端口数据将在这里动态生成 -->
+                </tbody>
+                <tfoot>
+                    <tr class="add-port-row">
+                        <td></td>
+                        <td>
+                            <input type="number" id="portInput" placeholder="输入端口号自动添加" min="1" max="65535">
+                        </td>
+                        <td colspan="3"></td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>
+    </div>
+
+    <script src="static/app.js"></script>
+</body>
+</html>
