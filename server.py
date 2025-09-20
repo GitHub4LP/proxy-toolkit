@@ -107,14 +107,13 @@ class PortServer:
         return web.json_response(port_info.to_dict())
 
     async def nginx_encoding_test_handler(self, request):
-        """检测 nginx 是否会自动解码 URL"""
+        """检测 nginx 解码深度"""
         return web.json_response({
             "progressive_encoding_tests": {
                 "layer_1": "/api/test-progressive-encoding/1layer%2Fslash",
                 "layer_2": "/api/test-progressive-encoding/2layer%252Fslash", 
                 "layer_3": "/api/test-progressive-encoding/3layer%25252Fslash"
-            },
-            "description": "智能检测 nginx 解码行为 - 渐进式编码检测(1-3层)"
+            }
         })
 
 
@@ -124,95 +123,29 @@ class PortServer:
 
 
     async def test_progressive_encoding_handler(self, request):
-        """渐进式编码测试端点 - 测试1层、2层、3层编码的解码行为"""
+        """渐进式编码测试端点"""
         path = request.match_info.get("path", "")
         
-        # 分析接收到的路径
-        results = {
-            "received_path": path,
-            "original_url": str(request.url),
-            "timestamp": time.time(),
-            "progressive_analysis": {
-                # 检测原始字符
-                "has_slash": "/" in path,
-                "has_space": " " in path,
-                "has_percent": "%" in path,
-                
-                # 检测1层编码残留
-                "has_percent_2F": "%2F" in path.upper(),
-                "has_percent_20": "%20" in path,
-                "has_percent_25": "%25" in path,
-                
-                # 检测2层编码残留
-                "has_percent_252F": "%252F" in path.upper(),
-                "has_percent_2520": "%2520" in path,
-                "has_percent_2525": "%2525" in path,
-                
-                # 检测3层编码残留
-                "has_percent_25252F": "%25252F" in path.upper(),
-                "has_percent_252520": "%252520" in path,
-                "has_percent_252525": "%252525" in path,
-            }
-        }
+        # 简化分析：只检测关键字符
+        has_slash = "/" in path
+        has_encoded_slash = "%2F" in path.upper()
         
-        # 分析解码行为
-        analysis = results["progressive_analysis"]
-        decode_behavior = []
-        
-        # 分析斜杠解码
-        if analysis["has_slash"]:
-            if "1layer" in path:
-                decode_behavior.append("1层编码的%2F被完全解码为/")
-            elif "2layer" in path:
-                decode_behavior.append("2层编码被解码到原始字符/")
-            elif "3layer" in path:
-                decode_behavior.append("3层编码被解码到原始字符/")
-        elif analysis["has_percent_2F"]:
-            if "2layer" in path:
-                decode_behavior.append("2层编码的%252F被解码1层为%2F")
-            elif "3layer" in path:
-                decode_behavior.append("3层编码被解码到1层编码%2F")
-        elif analysis["has_percent_252F"]:
-            if "3layer" in path:
-                decode_behavior.append("3层编码的%25252F被解码1层为%252F")
-        elif analysis["has_percent_25252F"]:
-            decode_behavior.append("3层编码保持不变")
-            
-        # 推断nginx解码策略
-        if "1layer" in path:
-            if analysis["has_slash"]:
-                nginx_strategy = "1层编码完全解码为原始字符"
-            elif analysis["has_percent_2F"]:
-                nginx_strategy = "1层编码未解码"
-            else:
-                nginx_strategy = "1层编码结果异常"
-        elif "2layer" in path:
-            if analysis["has_slash"]:
-                nginx_strategy = "2层编码完全解码为原始字符(递归解码)"
-            elif analysis["has_percent_2F"]:
-                nginx_strategy = "2层编码解码1层为%2F"
-            elif analysis["has_percent_252F"]:
-                nginx_strategy = "2层编码未解码"
-            else:
-                nginx_strategy = "2层编码结果异常"
-        elif "3layer" in path:
-            if analysis["has_slash"]:
-                nginx_strategy = "3层编码完全解码为原始字符(递归解码)"
-            elif analysis["has_percent_2F"]:
-                nginx_strategy = "3层编码解码2层为%2F"
-            elif analysis["has_percent_252F"]:
-                nginx_strategy = "3层编码解码1层为%252F"
-            elif analysis["has_percent_25252F"]:
-                nginx_strategy = "3层编码未解码"
-            else:
-                nginx_strategy = "3层编码结果异常"
+        # 推断解码层数
+        if "1layer" in path and has_slash:
+            decode_depth = 1
+        elif "2layer" in path and has_slash:
+            decode_depth = 2  
+        elif "3layer" in path and has_slash:
+            decode_depth = 3
+        elif has_encoded_slash:
+            decode_depth = 1 if "2layer" in path else 0
         else:
-            nginx_strategy = "未知测试类型"
+            decode_depth = 0
             
-        results["decode_behavior"] = decode_behavior
-        results["nginx_strategy"] = nginx_strategy
-        
-        return web.json_response(results)
+        return web.json_response({
+            "path": path,
+            "decode_depth": decode_depth
+        })
 
     async def service_worker_handler(self, request):
         """提供 Service Worker 脚本 - 支持模板替换"""
