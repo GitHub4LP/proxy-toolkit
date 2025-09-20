@@ -579,9 +579,10 @@ class PortApp {
             }
             
             // 使用模板 Service Worker，通过 URL 参数传递编码配置
-            const swScriptPath = `${this.basePath}/subpath_service_worker.js?chinese=${this.needsChineseEncoding}&slash=${this.needsSlashEncoding}`;
+            // 暂时关闭中文编码，只处理 %2F 编码
+            const swScriptPath = `${this.basePath}/subpath_service_worker.js?chinese=false&slash=${this.needsSlashEncoding}`;
             
-            console.log(`[SW注册] 使用模板 Service Worker，中文编码: ${this.needsChineseEncoding}，%2F编码: ${this.needsSlashEncoding}`);
+            console.log(`[SW注册] 使用模板 Service Worker，中文编码: ${this.needsChineseEncoding} (暂时关闭)，%2F编码: ${this.needsSlashEncoding}`);
             
             // 注册 Service Worker
             const registration = await navigator.serviceWorker.register(

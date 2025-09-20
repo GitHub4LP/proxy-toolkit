@@ -28,21 +28,16 @@ function selectiveDoubleEncodeUrl(url) {
         const segments = originalPath.split('/');
         
         const encodedSegments = segments.map(segment => {
-            let needsEncoding = false;
-            
-            // 根据配置检查是否需要对该段进行编码
+            // 暂时只处理 %2F 编码问题
             if (NEEDS_SLASH_ENCODING && hasSlashEncodedChars(segment)) {
-                needsEncoding = true;
-            }
-            
-            if (NEEDS_CHINESE_ENCODING && hasChineseEncodedChars(segment)) {
-                needsEncoding = true;
-            }
-            
-            // 如果需要编码，对整个段进行 encodeURIComponent
-            if (needsEncoding) {
+                console.log(`[SW] 检测到 %2F，对段进行双重编码: ${segment}`);
                 return encodeURIComponent(segment);
             }
+            
+            // 中文编码暂时关闭
+            // if (NEEDS_CHINESE_ENCODING && hasChineseEncodedChars(segment)) {
+            //     return encodeURIComponent(segment);
+            // }
             
             return segment;
         });
@@ -50,7 +45,7 @@ function selectiveDoubleEncodeUrl(url) {
         const newPath = encodedSegments.join('/');
         if (newPath !== originalPath) {
             urlObj.pathname = newPath;
-            console.log(`[SW] 选择性双重编码: ${originalPath} → ${newPath}`);
+            console.log(`[SW] %2F 双重编码: ${originalPath} → ${newPath}`);
         }
         
         return urlObj.toString();
@@ -116,8 +111,8 @@ self.addEventListener('fetch', event => {
                                 const newUrl = new URL(event.request.url);
                                 newUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
                                 
-                                // 对 URL 进行选择性双重编码处理
-                                if (NEEDS_CHINESE_ENCODING || NEEDS_SLASH_ENCODING) {
+                                // 暂时只处理 %2F 双重编码
+                                if (NEEDS_SLASH_ENCODING) {
                                     const encodedUrl = selectiveDoubleEncodeUrl(newUrl.toString());
                                     return Response.redirect(encodedUrl, 302);
                                 }
@@ -126,8 +121,8 @@ self.addEventListener('fetch', event => {
                             } else {
                                 requestUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
                                 
-                                // 对 URL 进行选择性双重编码处理
-                                if (NEEDS_CHINESE_ENCODING || NEEDS_SLASH_ENCODING) {
+                                // 暂时只处理 %2F 双重编码
+                                if (NEEDS_SLASH_ENCODING) {
                                     requestUrl = new URL(selectiveDoubleEncodeUrl(requestUrl.toString()));
                                 }
                                 
