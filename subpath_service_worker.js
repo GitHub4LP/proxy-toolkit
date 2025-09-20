@@ -131,8 +131,8 @@ self.addEventListener('fetch', event => {
                         }
                     }
                     // 在路径匹配判断之前，先检查是否需要编码处理
-                    const needsEncoding = (NEEDS_SLASH_ENCODING && requestUrl.pathname.includes('%2F')) ||
-                                         (NEEDS_PERCENT_ENCODING && requestUrl.pathname.includes('%25'));
+                    const needsEncoding = (NGINX_DECODE_DEPTH > 0 && (requestUrl.pathname.includes('%2F') || requestUrl.pathname.includes('%25'))) ||
+                                         (NEEDS_CHINESE_ENCODING && /%[E][4-9A-F]%[0-9A-F]{2}%[0-9A-F]{2}/i.test(requestUrl.pathname));
                     
                     if (needsEncoding) {
                         console.log(`[SW] 检测到需要编码的字符，进行多层编码处理: ${requestUrl.pathname}`);
