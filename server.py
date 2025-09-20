@@ -67,6 +67,7 @@ class PortServer:
         self.app.router.add_get("/api/test-percent-encoding/{path:.*}", self.test_percent_encoding_handler)
         self.app.router.add_get("/api/test-general-encoding/{path:.*}", self.test_general_encoding_handler)
         self.app.router.add_get("/api/test-double-encoding/{path:.*}", self.test_double_encoding_handler)
+        self.app.router.add_get("/api/test-multi-encoding/{path:.*}", self.test_multi_encoding_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
 
@@ -118,7 +119,8 @@ class PortServer:
             "percent_test_path": "/api/test-percent-encoding/test%25percent",
             "general_test_path": "/api/test-general-encoding/test%2Fslash%25percent%20space",
             "double_encoding_test_path": "/api/test-double-encoding/file%2520name%252Fpath%2525test",
-            "description": "测试 nginx 是否自动解码 URL - 包括中文、%2F、%25、双重编码等"
+            "multi_encoding_test_path": "/api/test-multi-encoding/test%252525252520space%2525252525252Fslash%252525252525252525end",
+            "description": "测试 nginx 递归解码深度 - 包括3层、4层、5层编码测试"
         })
 
     async def test_encoding_handler(self, request):
@@ -170,6 +172,88 @@ class PortServer:
         }
         return web.json_response(results)
 
+    async def test_multi_encoding_handler(self, request):
+        """测试多层编码检测端点 - 测试3层、4层、5层编码"""
+        path = request.match_info.get("path", "")
+        
+        # 分析接收到的路径
+        results = {
+            "received_path": path,
+            "original_url": str(request.url),
+            "timestamp": time.time(),
+            "multi_layer_analysis": {
+                # 检测不同层次的编码残留
+                "has_slash": "/" in path,
+                "has_percent_2F": "%2F" in path.upper(),
+                "has_percent_252F": "%252F" in path.upper(),
+                "has_percent_25252F": "%25252F" in path.upper(),
+                "has_percent_2525252F": "%2525252F" in path.upper(),
+                
+                # 检测空格的多层编码
+                "has_space": " " in path,
+                "has_percent_20": "%20" in path,
+                "has_percent_2520": "%2520" in path,
+                "has_percent_252520": "%252520" in path,
+                "has_percent_25252520": "%25252520" in path,
+                
+                # 检测百分号的多层编码
+                "has_percent": "%" in path,
+                "has_percent_25": "%25" in path,
+                "has_percent_2525": "%2525" in path,
+                "has_percent_252525": "%252525" in path,
+                "has_percent_25252525": "%25252525" in path,
+            },
+            "encoding_layers_detected": []
+        }
+        
+        # 分析编码层次
+        analysis = results["multi_layer_analysis"]
+        
+        # 分析斜杠编码层次
+        if analysis["has_slash"] and not analysis["has_percent_2F"]:
+            results["encoding_layers_detected"].append("slash_fully_decoded")
+        elif analysis["has_percent_2F"] and not analysis["has_percent_252F"]:
+            results["encoding_layers_detected"].append("slash_1_layer_remaining")
+        elif analysis["has_percent_252F"] and not analysis["has_percent_25252F"]:
+            results["encoding_layers_detected"].append("slash_2_layers_remaining")
+        elif analysis["has_percent_25252F"] and not analysis["has_percent_2525252F"]:
+            results["encoding_layers_detected"].append("slash_3_layers_remaining")
+        elif analysis["has_percent_2525252F"]:
+            results["encoding_layers_detected"].append("slash_4_or_more_layers_remaining")
+            
+        # 分析空格编码层次
+        if analysis["has_space"] and not analysis["has_percent_20"]:
+            results["encoding_layers_detected"].append("space_fully_decoded")
+        elif analysis["has_percent_20"] and not analysis["has_percent_2520"]:
+            results["encoding_layers_detected"].append("space_1_layer_remaining")
+        elif analysis["has_percent_2520"] and not analysis["has_percent_252520"]:
+            results["encoding_layers_detected"].append("space_2_layers_remaining")
+        elif analysis["has_percent_252520"] and not analysis["has_percent_25252520"]:
+            results["encoding_layers_detected"].append("space_3_layers_remaining")
+        elif analysis["has_percent_25252520"]:
+            results["encoding_layers_detected"].append("space_4_or_more_layers_remaining")
+            
+        # 计算解码深度
+        max_layers_tested = 5
+        layers_decoded = 0
+        
+        # 基于斜杠编码计算解码层数
+        if "slash_fully_decoded" in results["encoding_layers_detected"]:
+            layers_decoded = max_layers_tested
+        elif "slash_1_layer_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max_layers_tested - 1
+        elif "slash_2_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max_layers_tested - 2
+        elif "slash_3_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max_layers_tested - 3
+        elif "slash_4_or_more_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = 1
+            
+        results["nginx_decode_depth"] = layers_decoded
+        results["recommended_encoding_layers"] = layers_decoded + 2  # 建议比检测到的解码深度多2层
+        
+        return web.json_response(results)
+
     async def test_double_encoding_handler(self, request):
         """测试双重编码检测端点 - 检测 %25XX 形式的编码"""
         path = request.match_info.get("path", "")
@@ -208,6 +292,109 @@ class PortServer:
         else:
             results["double_decode_detected"] = "none"
             
+        return web.json_response(results)
+
+    async def test_multi_encoding_handler(self, request):
+        """测试多层编码检测端点 - 检测 nginx 递归解码深度"""
+        path = request.match_info.get("path", "")
+        
+        # 分析接收到的路径
+        results = {
+            "received_path": path,
+            "original_url": str(request.url),
+            "timestamp": time.time(),
+            "multi_layer_analysis": {
+                # 斜杠多层编码检测 (/ -> %2F -> %252F -> %25252F -> %2525252F -> %252525252F)
+                "has_slash": "/" in path,
+                "has_percent_2F": "%2F" in path.upper(),
+                "has_percent_252F": "%252F" in path.upper(),
+                "has_percent_25252F": "%25252F" in path.upper(),
+                "has_percent_2525252F": "%2525252F" in path.upper(),
+                "has_percent_252525252F": "%252525252F" in path.upper(),
+                
+                # 空格多层编码检测 (space -> %20 -> %2520 -> %252520 -> %25252520 -> %2525252520)
+                "has_space": " " in path,
+                "has_percent_20": "%20" in path,
+                "has_percent_2520": "%2520" in path,
+                "has_percent_252520": "%252520" in path,
+                "has_percent_25252520": "%25252520" in path,
+                "has_percent_2525252520": "%2525252520" in path,
+                
+                # 百分号多层编码检测 (% -> %25 -> %2525 -> %252525 -> %25252525 -> %2525252525)
+                "has_percent": "%" in path,
+                "has_percent_25": "%25" in path,
+                "has_percent_2525": "%2525" in path,
+                "has_percent_252525": "%252525" in path,
+                "has_percent_25252525": "%25252525" in path,
+                "has_percent_2525252525": "%2525252525" in path,
+            },
+            "encoding_layers_detected": []
+        }
+        
+        # 分析编码层次
+        analysis = results["multi_layer_analysis"]
+        
+        # 分析斜杠编码层次
+        if analysis["has_slash"] and not analysis["has_percent_2F"]:
+            results["encoding_layers_detected"].append("slash_fully_decoded")
+        elif analysis["has_percent_2F"] and not analysis["has_percent_252F"]:
+            results["encoding_layers_detected"].append("slash_1_layer_remaining")
+        elif analysis["has_percent_252F"] and not analysis["has_percent_25252F"]:
+            results["encoding_layers_detected"].append("slash_2_layers_remaining")
+        elif analysis["has_percent_25252F"] and not analysis["has_percent_2525252F"]:
+            results["encoding_layers_detected"].append("slash_3_layers_remaining")
+        elif analysis["has_percent_2525252F"] and not analysis["has_percent_252525252F"]:
+            results["encoding_layers_detected"].append("slash_4_layers_remaining")
+        elif analysis["has_percent_252525252F"]:
+            results["encoding_layers_detected"].append("slash_5_or_more_layers_remaining")
+            
+        # 分析空格编码层次
+        if analysis["has_space"] and not analysis["has_percent_20"]:
+            results["encoding_layers_detected"].append("space_fully_decoded")
+        elif analysis["has_percent_20"] and not analysis["has_percent_2520"]:
+            results["encoding_layers_detected"].append("space_1_layer_remaining")
+        elif analysis["has_percent_2520"] and not analysis["has_percent_252520"]:
+            results["encoding_layers_detected"].append("space_2_layers_remaining")
+        elif analysis["has_percent_252520"] and not analysis["has_percent_25252520"]:
+            results["encoding_layers_detected"].append("space_3_layers_remaining")
+        elif analysis["has_percent_25252520"] and not analysis["has_percent_2525252520"]:
+            results["encoding_layers_detected"].append("space_4_layers_remaining")
+        elif analysis["has_percent_2525252520"]:
+            results["encoding_layers_detected"].append("space_5_or_more_layers_remaining")
+            
+        # 计算解码深度
+        max_layers_tested = 5
+        layers_decoded = 0
+        
+        # 基于斜杠编码计算解码层数
+        if "slash_fully_decoded" in results["encoding_layers_detected"]:
+            layers_decoded = max_layers_tested
+        elif "slash_1_layer_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max_layers_tested - 1
+        elif "slash_2_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max_layers_tested - 2
+        elif "slash_3_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max_layers_tested - 3
+        elif "slash_4_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max_layers_tested - 4
+        elif "slash_5_or_more_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = 0  # 至少还有5层，说明nginx没有解码或解码层数很少
+            
+        # 如果基于空格的检测结果更准确，使用空格的结果
+        if "space_fully_decoded" in results["encoding_layers_detected"]:
+            layers_decoded = max(layers_decoded, max_layers_tested)
+        elif "space_1_layer_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max(layers_decoded, max_layers_tested - 1)
+        elif "space_2_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max(layers_decoded, max_layers_tested - 2)
+        elif "space_3_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max(layers_decoded, max_layers_tested - 3)
+        elif "space_4_layers_remaining" in results["encoding_layers_detected"]:
+            layers_decoded = max(layers_decoded, max_layers_tested - 4)
+            
+        results["decode_depth"] = layers_decoded
+        results["recommended_encoding_layers"] = layers_decoded + 2  # 建议比检测到的解码深度多2层
+        
         return web.json_response(results)
 
     async def service_worker_handler(self, request):
