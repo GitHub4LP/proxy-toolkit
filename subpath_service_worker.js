@@ -1,3 +1,6 @@
+// 编码配置 - 由后端模板替换
+const NEEDS_CHINESE_ENCODING = {{NEEDS_CHINESE_ENCODING}};
+const NEEDS_SLASH_ENCODING = {{NEEDS_SLASH_ENCODING}};
 
 const scope = new URL(self.registration.scope).pathname
 let registeredPaths = new Set([scope]);
@@ -16,6 +19,31 @@ function longestCommonPrefix(str1, str2) {
         }
     }
     return prefix.join('');
+}
+
+// URL 编码处理函数
+function encodeUrlForNginx(url) {
+    if (!NEEDS_CHINESE_ENCODING && !NEEDS_SLASH_ENCODING) {
+        return url; // 不需要任何编码
+    }
+    
+    let encoded = url;
+    
+    // 处理中文字符编码
+    if (NEEDS_CHINESE_ENCODING) {
+        // 对中文字符进行双重编码
+        encoded = encoded.replace(/[\u4e00-\u9fff]/g, function(match) {
+            return encodeURIComponent(encodeURIComponent(match));
+        });
+    }
+    
+    // 处理 %2F 编码
+    if (NEEDS_SLASH_ENCODING) {
+        // 将 / 编码为 %252F (双重编码的 %2F)
+        encoded = encoded.replace(/\//g, '%252F');
+    }
+    
+    return encoded;
 }
 
 // ==================== Service Worker 事件处理 ====================
@@ -56,10 +84,24 @@ self.addEventListener('fetch', event => {
                         if (lcp !== matchedPath) {
                             if (event.request.method === 'GET') {
                                 const newUrl = new URL(event.request.url);
-                                newUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
+                                let newPathname = requestUrl.pathname.replace(lcp, matchedPath);
+                                
+                                // 应用编码处理
+                                if (NEEDS_CHINESE_ENCODING || NEEDS_SLASH_ENCODING) {
+                                    newPathname = encodeUrlForNginx(newPathname);
+                                }
+                                
+                                newUrl.pathname = newPathname;
                                 return Response.redirect(newUrl.href, 302);
                             } else {
-                                requestUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
+                                let newPathname = requestUrl.pathname.replace(lcp, matchedPath);
+                                
+                                // 应用编码处理
+                                if (NEEDS_CHINESE_ENCODING || NEEDS_SLASH_ENCODING) {
+                                    newPathname = encodeUrlForNginx(newPathname);
+                                }
+                                
+                                requestUrl.pathname = newPathname;
                                 const modifiedRequest = new Request(requestUrl, {
                                     ...event.request,
                                     method: event.request.method,

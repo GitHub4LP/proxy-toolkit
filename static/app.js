@@ -5,6 +5,8 @@ class PortApp {
         this.serviceWorkerStates = new Map(); // 存储每个端口的 Service Worker 状态
         this.addPortTimeout = null; // 防抖定时器
         this.needsUrlEncoding = null; // nginx 编码检测结果
+        this.needsChineseEncoding = false; // 中文字符是否需要编码
+        this.needsSlashEncoding = false; // %2F 是否需要编码
         this.setupPortInput();
         this.initServiceWorkerSupport();
         
@@ -43,12 +45,20 @@ class PortApp {
             // 检测 %2F 编码
             await this.testSlashEncoding(testInfo.slash_test_path);
             
-            console.log(`[编码检测] 最终结果: ${this.needsUrlEncoding ? '需要' : '不需要'}URL编码`);
+            // 综合判断
+            this.needsUrlEncoding = this.needsChineseEncoding || this.needsSlashEncoding;
+            
+            console.log('[编码检测] 检测完成:');
+            console.log('  - 中文字符需要编码:', this.needsChineseEncoding);
+            console.log('  - %2F 需要编码:', this.needsSlashEncoding);
+            console.log('  - 总体需要URL编码:', this.needsUrlEncoding);
             
         } catch (error) {
             console.error('[编码检测] 发生异常:', error);
             console.log('[编码检测] 异常类型:', error.constructor.name);
             console.log('[编码检测] 异常消息:', error.message);
+            this.needsChineseEncoding = false;
+            this.needsSlashEncoding = false;
             this.needsUrlEncoding = false; // 异常时默认不启用编码
         }
     }
@@ -65,17 +75,19 @@ class PortApp {
                 const result = await testResponse.json();
                 console.log('[中文编码检测] 成功 - nginx 没有自动解码中文');
                 console.log('[中文编码检测] 响应内容:', result);
+                this.needsChineseEncoding = false;
                 
             } else if (testResponse.status === 400) {
                 console.log('[中文编码检测] 400错误 - nginx 自动解码中文导致错误');
-                this.needsUrlEncoding = true;
+                this.needsChineseEncoding = true;
                 
             } else {
                 console.log('[中文编码检测] 其他错误，状态码:', testResponse.status);
+                this.needsChineseEncoding = false;
             }
         } catch (error) {
             console.log('[中文编码检测] 请求异常:', error.message);
-            // 可能是网络错误，不影响最终判断
+            this.needsChineseEncoding = false;
         }
     }
 
@@ -94,20 +106,23 @@ class PortApp {
                 // 检查 %2F 是否被自动解码为 /
                 if (result.contains_slash) {
                     console.log('[%2F编码检测] %2F 被自动解码为 / - 需要编码处理');
-                    this.needsUrlEncoding = true;
+                    this.needsSlashEncoding = true;
                 } else {
                     console.log('[%2F编码检测] %2F 保持编码状态 - 正常');
+                    this.needsSlashEncoding = false;
                 }
                 
             } else if (testResponse.status === 400) {
                 console.log('[%2F编码检测] 400错误 - 可能是路径解析问题');
-                this.needsUrlEncoding = true;
+                this.needsSlashEncoding = true;
                 
             } else {
                 console.log('[%2F编码检测] 其他错误，状态码:', testResponse.status);
+                this.needsSlashEncoding = false;
             }
         } catch (error) {
             console.log('[%2F编码检测] 请求异常:', error.message);
+            this.needsSlashEncoding = false;
         }
     }
 
@@ -563,13 +578,10 @@ class PortApp {
                 scope += '/';
             }
             
-            // 根据编码检测结果选择合适的 Service Worker
-            const swFileName = this.needsUrlEncoding ? 
-                'subpath_service_worker_enhanced.js' : 
-                'subpath_service_worker.js';
-            const swScriptPath = `${this.basePath}/${swFileName}`;
+            // 使用模板 Service Worker，通过 URL 参数传递编码配置
+            const swScriptPath = `${this.basePath}/subpath_service_worker.js?chinese=${this.needsChineseEncoding}&slash=${this.needsSlashEncoding}`;
             
-            console.log(`[SW注册] 使用 ${swFileName}，编码功能: ${this.needsUrlEncoding ? '启用' : '禁用'}`);
+            console.log(`[SW注册] 使用模板 Service Worker，中文编码: ${this.needsChineseEncoding}，%2F编码: ${this.needsSlashEncoding}`);
             
             // 注册 Service Worker
             const registration = await navigator.serviceWorker.register(

@@ -66,7 +66,6 @@ class PortServer:
         self.app.router.add_get("/api/test-slash-encoding/{path:.*}", self.test_slash_encoding_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
-        self.app.router.add_get("/subpath_service_worker_enhanced.js", self.enhanced_service_worker_handler)
 
         # 静态文件
         static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -139,11 +138,19 @@ class PortServer:
         })
 
     async def service_worker_handler(self, request):
-        """提供 Service Worker 脚本"""
+        """提供 Service Worker 脚本 - 支持模板替换"""
         try:
             sw_file = os.path.join(os.path.dirname(__file__), "subpath_service_worker.js")
             with open(sw_file, "r", encoding="utf-8") as f:
                 content = f.read()
+            
+            # 获取编码配置参数
+            chinese_encoding = request.query.get('chinese', 'false').lower() == 'true'
+            slash_encoding = request.query.get('slash', 'false').lower() == 'true'
+            
+            # 替换模板标记
+            content = content.replace('{{NEEDS_CHINESE_ENCODING}}', str(chinese_encoding).lower())
+            content = content.replace('{{NEEDS_SLASH_ENCODING}}', str(slash_encoding).lower())
             
             return web.Response(
                 text=content,
@@ -156,23 +163,7 @@ class PortServer:
         except FileNotFoundError:
             return web.Response(text="Service Worker 脚本未找到", status=404)
 
-    async def enhanced_service_worker_handler(self, request):
-        """提供增强版 Service Worker 脚本（包含编码功能）"""
-        try:
-            sw_file = os.path.join(os.path.dirname(__file__), "subpath_service_worker_enhanced.js")
-            with open(sw_file, "r", encoding="utf-8") as f:
-                content = f.read()
-            
-            return web.Response(
-                text=content,
-                content_type="application/javascript",
-                headers={
-                    "Service-Worker-Allowed": "/",  # 允许控制根路径下的所有作用域
-                    "Cache-Control": "no-cache"
-                }
-            )
-        except FileNotFoundError:
-            return web.Response(text="增强版 Service Worker 脚本未找到", status=404)
+
 
     def _update_port_info(self, port_info: PortInfo):
         """更新端口信息"""
