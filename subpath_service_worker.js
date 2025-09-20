@@ -1,6 +1,7 @@
 // 编码配置 - 由后端模板替换
 const NEEDS_CHINESE_ENCODING = {{NEEDS_CHINESE_ENCODING}};
 const NEEDS_SLASH_ENCODING = {{NEEDS_SLASH_ENCODING}};
+const NEEDS_PERCENT_ENCODING = {{NEEDS_PERCENT_ENCODING}};
 
 const scope = new URL(self.registration.scope).pathname
 let registeredPaths = new Set([scope]);
@@ -21,6 +22,11 @@ function hasSlashEncodedChars(str) {
     return /%2F/i.test(str);
 }
 
+function hasPercentEncodedChars(str) {
+    // 检测是否包含已编码的百分号（%25）
+    return /%25/i.test(str);
+}
+
 function selectiveDoubleEncodeUrl(url) {
     try {
         const urlObj = new URL(url);
@@ -28,9 +34,15 @@ function selectiveDoubleEncodeUrl(url) {
         const segments = originalPath.split('/');
         
         const encodedSegments = segments.map(segment => {
-            // 暂时只处理 %2F 编码问题
+            // 检查 %2F 编码需求
             if (NEEDS_SLASH_ENCODING && hasSlashEncodedChars(segment)) {
                 console.log(`[SW] 检测到 %2F，对段进行双重编码: ${segment}`);
+                return encodeURIComponent(segment);
+            }
+            
+            // 检查 %25 编码需求
+            if (NEEDS_PERCENT_ENCODING && hasPercentEncodedChars(segment)) {
+                console.log(`[SW] 检测到 %25，对段进行双重编码: ${segment}`);
                 return encodeURIComponent(segment);
             }
             
@@ -104,9 +116,12 @@ self.addEventListener('fetch', event => {
                             break;
                         }
                     }
-                    // 在路径匹配判断之前，先检查是否需要 %2F 双重编码
-                    if (NEEDS_SLASH_ENCODING && requestUrl.pathname.includes('%2F')) {
-                        console.log(`[SW] 检测到 %2F，进行双重编码处理: ${requestUrl.pathname}`);
+                    // 在路径匹配判断之前，先检查是否需要编码处理
+                    const needsEncoding = (NEEDS_SLASH_ENCODING && requestUrl.pathname.includes('%2F')) ||
+                                         (NEEDS_PERCENT_ENCODING && requestUrl.pathname.includes('%25'));
+                    
+                    if (needsEncoding) {
+                        console.log(`[SW] 检测到需要编码的字符，进行双重编码处理: ${requestUrl.pathname}`);
                         const encodedUrl = selectiveDoubleEncodeUrl(requestUrl.toString());
                         if (encodedUrl !== requestUrl.toString()) {
                             if (event.request.method === 'GET') {

@@ -64,6 +64,8 @@ class PortServer:
         self.app.router.add_get("/api/nginx-encoding-test", self.nginx_encoding_test_handler)
         self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
         self.app.router.add_get("/api/test-slash-encoding/{path:.*}", self.test_slash_encoding_handler)
+        self.app.router.add_get("/api/test-percent-encoding/{path:.*}", self.test_percent_encoding_handler)
+        self.app.router.add_get("/api/test-general-encoding/{path:.*}", self.test_general_encoding_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
 
@@ -112,7 +114,9 @@ class PortServer:
         return web.json_response({
             "chinese_test_path": "/api/test-encoding/中文测试",
             "slash_test_path": "/api/test-slash-encoding/test%2Fpath",
-            "description": "测试 nginx 是否自动解码 URL - 包括中文和%2F"
+            "percent_test_path": "/api/test-percent-encoding/test%25percent",
+            "general_test_path": "/api/test-general-encoding/test%2Fslash%25percent%20space",
+            "description": "测试 nginx 是否自动解码 URL - 包括中文、%2F、%25等"
         })
 
     async def test_encoding_handler(self, request):
@@ -137,6 +141,33 @@ class PortServer:
             "expected_encoded": "test%2Fpath"
         })
 
+    async def test_percent_encoding_handler(self, request):
+        """测试 %25 编码检测端点"""
+        path = request.match_info.get("path", "")
+        # 检查路径中是否包含百分号（说明 %25 被自动解码了）
+        has_percent = '%' in path
+        return web.json_response({
+            "received_path": path,
+            "has_percent": has_percent,
+            "message": f'%25 {"被自动解码为 %" if has_percent else "未被自动解码"}',
+            "original_url": str(request.url),
+            "timestamp": time.time()
+        })
+
+    async def test_general_encoding_handler(self, request):
+        """测试通用编码字符检测端点"""
+        path = request.match_info.get("path", "")
+        # 检查各种编码字符是否被解码
+        results = {
+            "received_path": path,
+            "slash_decoded": "/" in path,  # %2F -> /
+            "percent_decoded": "%" in path,  # %25 -> %
+            "space_decoded": " " in path,  # %20 -> space
+            "original_url": str(request.url),
+            "timestamp": time.time()
+        }
+        return web.json_response(results)
+
     async def service_worker_handler(self, request):
         """提供 Service Worker 脚本 - 支持模板替换"""
         try:
@@ -147,10 +178,12 @@ class PortServer:
             # 获取编码配置参数
             chinese_encoding = request.query.get('chinese', 'false').lower() == 'true'
             slash_encoding = request.query.get('slash', 'false').lower() == 'true'
+            percent_encoding = request.query.get('percent', 'false').lower() == 'true'
             
             # 替换模板标记
             content = content.replace('{{NEEDS_CHINESE_ENCODING}}', str(chinese_encoding).lower())
             content = content.replace('{{NEEDS_SLASH_ENCODING}}', str(slash_encoding).lower())
+            content = content.replace('{{NEEDS_PERCENT_ENCODING}}', str(percent_encoding).lower())
             
             return web.Response(
                 text=content,

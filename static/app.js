@@ -7,6 +7,7 @@ class PortApp {
         this.needsUrlEncoding = null; // nginx 编码检测结果
         this.needsChineseEncoding = false; // 中文字符是否需要编码
         this.needsSlashEncoding = false; // %2F 是否需要编码
+        this.needsPercentEncoding = false; // %25 是否需要编码
         this.setupPortInput();
         this.initServiceWorkerSupport();
         
@@ -45,12 +46,16 @@ class PortApp {
             // 检测 %2F 编码
             await this.testSlashEncoding(testInfo.slash_test_path);
             
+            // 检测 %25 编码
+            await this.testPercentEncoding(testInfo.percent_test_path);
+            
             // 综合判断
-            this.needsUrlEncoding = this.needsChineseEncoding || this.needsSlashEncoding;
+            this.needsUrlEncoding = this.needsChineseEncoding || this.needsSlashEncoding || this.needsPercentEncoding;
             
             console.log('[编码检测] 检测完成:');
             console.log('  - 中文字符需要编码:', this.needsChineseEncoding);
             console.log('  - %2F 需要编码:', this.needsSlashEncoding);
+            console.log('  - %25 需要编码:', this.needsPercentEncoding);
             console.log('  - 总体需要URL编码:', this.needsUrlEncoding);
             
         } catch (error) {
@@ -59,6 +64,7 @@ class PortApp {
             console.log('[编码检测] 异常消息:', error.message);
             this.needsChineseEncoding = false;
             this.needsSlashEncoding = false;
+            this.needsPercentEncoding = false;
             this.needsUrlEncoding = false; // 异常时默认不启用编码
         }
     }
@@ -123,6 +129,41 @@ class PortApp {
         } catch (error) {
             console.log('[%2F编码检测] 请求异常:', error.message);
             this.needsSlashEncoding = false;
+        }
+    }
+
+    async testPercentEncoding(testPath) {
+        console.log('[%25编码检测] 测试路径:', testPath);
+        console.log('[%25编码检测] 完整URL:', `${this.basePath}${testPath}`);
+        
+        try {
+            const testResponse = await fetch(`${this.basePath}${testPath}`);
+            console.log('[%25编码检测] 响应状态:', testResponse.status);
+            
+            if (testResponse.ok) {
+                const result = await testResponse.json();
+                console.log('[%25编码检测] 响应内容:', result);
+                
+                // 检查 %25 是否被自动解码为 %
+                if (result.has_percent) {
+                    console.log('[%25编码检测] %25 被自动解码为 % - 需要编码处理');
+                    this.needsPercentEncoding = true;
+                } else {
+                    console.log('[%25编码检测] %25 保持编码状态 - 正常');
+                    this.needsPercentEncoding = false;
+                }
+                
+            } else if (testResponse.status === 400) {
+                console.log('[%25编码检测] 400错误 - 可能是路径解析问题');
+                this.needsPercentEncoding = true;
+                
+            } else {
+                console.log('[%25编码检测] 其他错误，状态码:', testResponse.status);
+                this.needsPercentEncoding = false;
+            }
+        } catch (error) {
+            console.log('[%25编码检测] 请求异常:', error.message);
+            this.needsPercentEncoding = false;
         }
     }
 
@@ -579,10 +620,10 @@ class PortApp {
             }
             
             // 使用模板 Service Worker，通过 URL 参数传递编码配置
-            // 暂时关闭中文编码，只处理 %2F 编码
-            const swScriptPath = `${this.basePath}/subpath_service_worker.js?chinese=false&slash=${this.needsSlashEncoding}`;
+            // 暂时关闭中文编码，处理 %2F 和 %25 编码
+            const swScriptPath = `${this.basePath}/subpath_service_worker.js?chinese=false&slash=${this.needsSlashEncoding}&percent=${this.needsPercentEncoding}`;
             
-            console.log(`[SW注册] 使用模板 Service Worker，中文编码: ${this.needsChineseEncoding} (暂时关闭)，%2F编码: ${this.needsSlashEncoding}`);
+            console.log(`[SW注册] 使用模板 Service Worker，中文编码: ${this.needsChineseEncoding} (暂时关闭)，%2F编码: ${this.needsSlashEncoding}，%25编码: ${this.needsPercentEncoding}`);
             
             // 注册 Service Worker
             const registration = await navigator.serviceWorker.register(
