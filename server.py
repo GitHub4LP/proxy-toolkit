@@ -277,11 +277,12 @@ async def main():
     parser.add_argument("--port", type=int, help="监听端口 (默认系统分配)")
     args = parser.parse_args()
 
-    # 临时跳过代理环境检测，直接启动服务进行测试
-    # needs_service = check_subpath_requirement()
-    # if not needs_service:
-    #     print("[跳过] 无需启动服务")
-    #     return
+    # 检查是否需要启动服务
+    needs_service = check_subpath_requirement()
+    
+    if not needs_service:
+        print("[跳过] 无需启动服务")
+        return
 
     server = PortServer(args.host, args.port)
     runner = None

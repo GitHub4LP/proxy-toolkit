@@ -49,14 +49,23 @@ class PortApp {
             
             if (testResponse.ok) {
                 const result = await testResponse.json();
-                console.log('[编码检测] 成功响应内容:', result);
-                this.needsUrlEncoding = false; // 如果成功，说明不需要特殊编码
+                console.log('[编码检测] 请求成功 - nginx 没有自动解码');
+                console.log('[编码检测] 响应内容:', result);
+                this.needsUrlEncoding = false; // 请求成功说明不需要编码
+                
+            } else if (testResponse.status === 400) {
+                console.log('[编码检测] 400错误 - nginx 自动解码导致 aiohttp 报错');
+                console.log('[编码检测] 这正是我们要检测的情况！');
+                this.needsUrlEncoding = true; // 400错误说明需要编码
+                
             } else {
-                console.log('[编码检测] 请求失败，状态码:', testResponse.status);
+                console.log('[编码检测] 其他错误，状态码:', testResponse.status);
                 const errorText = await testResponse.text();
                 console.log('[编码检测] 错误内容:', errorText);
-                this.needsUrlEncoding = true; // 如果失败，可能需要编码
+                this.needsUrlEncoding = false; // 其他错误默认不启用编码
             }
+            
+            console.log(`[编码检测] 最终结果: ${this.needsUrlEncoding ? '需要' : '不需要'}URL编码`);
             
         } catch (error) {
             console.error('[编码检测] 发生异常:', error);
