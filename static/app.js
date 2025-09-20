@@ -4,6 +4,7 @@ class PortApp {
         this.basePath = window.location.pathname.replace(/\/$/, '');
         this.serviceWorkerStates = new Map(); // 存储每个端口的 Service Worker 状态
         this.addPortTimeout = null; // 防抖定时器
+        this.needsUrlEncoding = null; // nginx 编码检测结果
         this.setupPortInput();
         this.initServiceWorkerSupport();
         
@@ -17,11 +18,34 @@ class PortApp {
     }
 
     async initializeApp() {
-        // 首先更新Service Worker状态
+        // 首先检测 nginx 编码行为
+        await this.detectNginxEncoding();
+        
+        // 然后更新Service Worker状态
         await this.updateServiceWorkerStates();
         
-        // 然后刷新端口列表
+        // 最后刷新端口列表
         await this.refreshPorts();
+    }
+
+    async detectNginxEncoding() {
+        try {
+            // 获取测试路径
+            const response = await fetch(`${this.basePath}/api/nginx-encoding-test`);
+            const testInfo = await response.json();
+            
+            // 发送编码测试请求
+            const testResponse = await fetch(`${this.basePath}${testInfo.test_path}`);
+            const testResult = await testResponse.json();
+            
+            // 如果后端收到的是解码后的中文，说明 nginx 进行了自动解码
+            this.needsUrlEncoding = testResult.is_decoded;
+            
+            console.log(`[编码检测] nginx 自动解码: ${this.needsUrlEncoding ? '是' : '否'}`);
+        } catch (error) {
+            console.warn('[编码检测] 检测失败，默认不启用编码:', error);
+            this.needsUrlEncoding = false;
+        }
     }
 
     setupPortInput() {
@@ -476,8 +500,13 @@ class PortApp {
                 scope += '/';
             }
             
-            // Service Worker脚本路径使用当前端口管理服务的路径
-            const swScriptPath = `${this.basePath}/subpath_service_worker.js`;
+            // 根据编码检测结果选择合适的 Service Worker
+            const swFileName = this.needsUrlEncoding ? 
+                'subpath_service_worker_enhanced.js' : 
+                'subpath_service_worker.js';
+            const swScriptPath = `${this.basePath}/${swFileName}`;
+            
+            console.log(`[SW注册] 使用 ${swFileName}，编码功能: ${this.needsUrlEncoding ? '启用' : '禁用'}`);
             
             // 注册 Service Worker
             const registration = await navigator.serviceWorker.register(

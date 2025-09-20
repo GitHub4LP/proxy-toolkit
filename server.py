@@ -61,8 +61,11 @@ class PortServer:
         self.app.router.add_get("/", self.index_handler)
         self.app.router.add_get("/api/ports", self.list_ports_handler)
         self.app.router.add_get("/api/port/{port}", self.port_info_handler)
+        self.app.router.add_get("/api/nginx-encoding-test", self.nginx_encoding_test_handler)
+        self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
+        self.app.router.add_get("/subpath_service_worker_enhanced.js", self.enhanced_service_worker_handler)
 
         # 静态文件
         static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -104,6 +107,23 @@ class PortServer:
         self._update_port_info(port_info)
         return web.json_response(port_info.to_dict())
 
+    async def nginx_encoding_test_handler(self, request):
+        """检测 nginx 是否会自动解码 URL"""
+        test_path = "/api/test-encoding/%E4%B8%AD%E6%96%87"  # "中文" 的 UTF-8 编码
+        return web.json_response({
+            "test_path": test_path,
+            "decoded_path": "/api/test-encoding/中文"
+        })
+
+    async def test_encoding_handler(self, request):
+        """测试编码处理的端点"""
+        path = request.match_info.get("path", "")
+        return web.json_response({
+            "received_path": path,
+            "is_decoded": "中文" in path,  # 如果收到的是中文，说明 nginx 进行了解码
+            "original_url": str(request.url)
+        })
+
     async def service_worker_handler(self, request):
         """提供 Service Worker 脚本"""
         try:
@@ -122,11 +142,23 @@ class PortServer:
         except FileNotFoundError:
             return web.Response(text="Service Worker 脚本未找到", status=404)
 
-
-
-
-
-
+    async def enhanced_service_worker_handler(self, request):
+        """提供增强版 Service Worker 脚本（包含编码功能）"""
+        try:
+            sw_file = os.path.join(os.path.dirname(__file__), "subpath_service_worker_enhanced.js")
+            with open(sw_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            return web.Response(
+                text=content,
+                content_type="application/javascript",
+                headers={
+                    "Service-Worker-Allowed": "/",  # 允许控制根路径下的所有作用域
+                    "Cache-Control": "no-cache"
+                }
+            )
+        except FileNotFoundError:
+            return web.Response(text="增强版 Service Worker 脚本未找到", status=404)
 
     def _update_port_info(self, port_info: PortInfo):
         """更新端口信息"""
