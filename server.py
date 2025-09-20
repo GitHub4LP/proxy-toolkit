@@ -109,19 +109,21 @@ class PortServer:
 
     async def nginx_encoding_test_handler(self, request):
         """检测 nginx 是否会自动解码 URL"""
-        test_path = "/api/test-encoding/%E4%B8%AD%E6%96%87"  # "中文" 的 UTF-8 编码
+        # 直接使用中文路径进行测试
+        test_path = "/api/test-encoding/中文测试"
         return web.json_response({
             "test_path": test_path,
-            "decoded_path": "/api/test-encoding/中文"
+            "description": "测试 nginx 是否自动解码 URL - 直接发送中文路径"
         })
 
     async def test_encoding_handler(self, request):
-        """测试编码处理的端点"""
+        """测试编码处理的端点 - 接收中文路径"""
         path = request.match_info.get("path", "")
         return web.json_response({
             "received_path": path,
-            "is_decoded": "中文" in path,  # 如果收到的是中文，说明 nginx 进行了解码
-            "original_url": str(request.url)
+            "message": "成功接收到请求",
+            "original_url": str(request.url),
+            "timestamp": time.time()
         })
 
     async def service_worker_handler(self, request):
@@ -275,12 +277,11 @@ async def main():
     parser.add_argument("--port", type=int, help="监听端口 (默认系统分配)")
     args = parser.parse_args()
 
-    # 检查是否需要启动服务
-    needs_service = check_subpath_requirement()
-    
-    if not needs_service:
-        print("[跳过] 无需启动服务")
-        return
+    # 临时跳过代理环境检测，直接启动服务进行测试
+    # needs_service = check_subpath_requirement()
+    # if not needs_service:
+    #     print("[跳过] 无需启动服务")
+    #     return
 
     server = PortServer(args.host, args.port)
     runner = None

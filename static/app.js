@@ -30,21 +30,40 @@ class PortApp {
 
     async detectNginxEncoding() {
         try {
-            // 获取测试路径
+            console.log('[编码检测] 开始检测 nginx 编码行为...');
+            
+            // 获取测试配置
             const response = await fetch(`${this.basePath}/api/nginx-encoding-test`);
             const testInfo = await response.json();
+            console.log('[编码检测] 测试配置:', testInfo);
             
-            // 发送编码测试请求
+            // 直接发送包含中文的请求，观察会发生什么
+            console.log('[编码检测] 发送测试请求到:', testInfo.test_path);
+            console.log('[编码检测] 完整URL:', `${this.basePath}${testInfo.test_path}`);
+            
             const testResponse = await fetch(`${this.basePath}${testInfo.test_path}`);
-            const testResult = await testResponse.json();
             
-            // 如果后端收到的是解码后的中文，说明 nginx 进行了自动解码
-            this.needsUrlEncoding = testResult.is_decoded;
+            console.log('[编码检测] 响应状态:', testResponse.status);
+            console.log('[编码检测] 响应状态文本:', testResponse.statusText);
+            console.log('[编码检测] 响应头:', Object.fromEntries(testResponse.headers.entries()));
             
-            console.log(`[编码检测] nginx 自动解码: ${this.needsUrlEncoding ? '是' : '否'}`);
+            if (testResponse.ok) {
+                const result = await testResponse.json();
+                console.log('[编码检测] 成功响应内容:', result);
+                this.needsUrlEncoding = false; // 如果成功，说明不需要特殊编码
+            } else {
+                console.log('[编码检测] 请求失败，状态码:', testResponse.status);
+                const errorText = await testResponse.text();
+                console.log('[编码检测] 错误内容:', errorText);
+                this.needsUrlEncoding = true; // 如果失败，可能需要编码
+            }
+            
         } catch (error) {
-            console.warn('[编码检测] 检测失败，默认不启用编码:', error);
-            this.needsUrlEncoding = false;
+            console.error('[编码检测] 发生异常:', error);
+            console.log('[编码检测] 异常类型:', error.constructor.name);
+            console.log('[编码检测] 异常消息:', error.message);
+            console.log('[编码检测] 异常堆栈:', error.stack);
+            this.needsUrlEncoding = false; // 异常时默认不启用编码
         }
     }
 
