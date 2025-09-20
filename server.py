@@ -68,6 +68,7 @@ class PortServer:
         self.app.router.add_get("/api/test-general-encoding/{path:.*}", self.test_general_encoding_handler)
         self.app.router.add_get("/api/test-double-encoding/{path:.*}", self.test_double_encoding_handler)
         self.app.router.add_get("/api/test-multi-encoding/{path:.*}", self.test_multi_encoding_handler)
+        self.app.router.add_get("/api/test-progressive-encoding/{path:.*}", self.test_progressive_encoding_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
 
@@ -120,7 +121,12 @@ class PortServer:
             "general_test_path": "/api/test-general-encoding/test%2Fslash%25percent%20space",
             "double_encoding_test_path": "/api/test-double-encoding/file%2520name%252Fpath%2525test",
             "multi_encoding_test_path": "/api/test-multi-encoding/test%252525252520space%2525252525252Fslash%252525252525252525end",
-            "description": "测试 nginx 递归解码深度 - 包括3层、4层、5层编码测试"
+            "progressive_encoding_tests": {
+                "layer_1": "/api/test-progressive-encoding/1layer%2Fslash",
+                "layer_2": "/api/test-progressive-encoding/2layer%252Fslash", 
+                "layer_3": "/api/test-progressive-encoding/3layer%25252Fslash"
+            },
+            "description": "测试 nginx 解码行为 - 包括渐进式(1-3层)和多层编码(3-5层)测试"
         })
 
     async def test_encoding_handler(self, request):
@@ -362,38 +368,133 @@ class PortServer:
         elif analysis["has_percent_2525252520"]:
             results["encoding_layers_detected"].append("space_5_or_more_layers_remaining")
             
-        # 计算解码深度
+        # 计算解码深度 - 基于剩余编码层数推算已解码层数
         max_layers_tested = 5
-        layers_decoded = 0
+        layers_decoded = 1  # 默认至少解码了1层（从测试结果可以看出）
         
-        # 基于斜杠编码计算解码层数
+        # 分析解码深度
+        decode_analysis = []
+        
+        # 基于斜杠编码分析
         if "slash_fully_decoded" in results["encoding_layers_detected"]:
-            layers_decoded = max_layers_tested
+            slash_decoded = max_layers_tested
+            decode_analysis.append(f"斜杠: 解码了{slash_decoded}层")
         elif "slash_1_layer_remaining" in results["encoding_layers_detected"]:
-            layers_decoded = max_layers_tested - 1
+            slash_decoded = max_layers_tested - 1
+            decode_analysis.append(f"斜杠: 解码了{slash_decoded}层")
         elif "slash_2_layers_remaining" in results["encoding_layers_detected"]:
-            layers_decoded = max_layers_tested - 2
+            slash_decoded = max_layers_tested - 2
+            decode_analysis.append(f"斜杠: 解码了{slash_decoded}层")
         elif "slash_3_layers_remaining" in results["encoding_layers_detected"]:
-            layers_decoded = max_layers_tested - 3
+            slash_decoded = max_layers_tested - 3
+            decode_analysis.append(f"斜杠: 解码了{slash_decoded}层")
         elif "slash_4_layers_remaining" in results["encoding_layers_detected"]:
-            layers_decoded = max_layers_tested - 4
+            slash_decoded = max_layers_tested - 4
+            decode_analysis.append(f"斜杠: 解码了{slash_decoded}层")
         elif "slash_5_or_more_layers_remaining" in results["encoding_layers_detected"]:
-            layers_decoded = 0  # 至少还有5层，说明nginx没有解码或解码层数很少
+            slash_decoded = 1  # 从5层变成5层或更多，说明至少解码了1层
+            decode_analysis.append(f"斜杠: 至少解码了{slash_decoded}层")
+        else:
+            slash_decoded = 0
             
-        # 如果基于空格的检测结果更准确，使用空格的结果
+        # 基于空格编码分析
         if "space_fully_decoded" in results["encoding_layers_detected"]:
-            layers_decoded = max(layers_decoded, max_layers_tested)
+            space_decoded = max_layers_tested
+            decode_analysis.append(f"空格: 解码了{space_decoded}层")
         elif "space_1_layer_remaining" in results["encoding_layers_detected"]:
-            layers_decoded = max(layers_decoded, max_layers_tested - 1)
+            space_decoded = max_layers_tested - 1
+            decode_analysis.append(f"空格: 解码了{space_decoded}层")
         elif "space_2_layers_remaining" in results["encoding_layers_detected"]:
-            layers_decoded = max(layers_decoded, max_layers_tested - 2)
+            space_decoded = max_layers_tested - 2
+            decode_analysis.append(f"空格: 解码了{space_decoded}层")
         elif "space_3_layers_remaining" in results["encoding_layers_detected"]:
-            layers_decoded = max(layers_decoded, max_layers_tested - 3)
+            space_decoded = max_layers_tested - 3
+            decode_analysis.append(f"空格: 解码了{space_decoded}层")
         elif "space_4_layers_remaining" in results["encoding_layers_detected"]:
-            layers_decoded = max(layers_decoded, max_layers_tested - 4)
+            space_decoded = max_layers_tested - 4
+            decode_analysis.append(f"空格: 解码了{space_decoded}层")
+        elif "space_5_or_more_layers_remaining" in results["encoding_layers_detected"]:
+            space_decoded = 1  # 从5层变成5层或更多，说明至少解码了1层
+            decode_analysis.append(f"空格: 至少解码了{space_decoded}层")
+        else:
+            space_decoded = 0
             
+        # 取最大解码深度作为nginx的解码能力
+        layers_decoded = max(slash_decoded, space_decoded, 1)
+        
         results["decode_depth"] = layers_decoded
+        results["decode_analysis"] = decode_analysis
         results["recommended_encoding_layers"] = layers_decoded + 2  # 建议比检测到的解码深度多2层
+        
+        return web.json_response(results)
+
+    async def test_progressive_encoding_handler(self, request):
+        """渐进式编码测试端点 - 测试1层、2层、3层编码的解码行为"""
+        path = request.match_info.get("path", "")
+        
+        # 分析接收到的路径
+        results = {
+            "received_path": path,
+            "original_url": str(request.url),
+            "timestamp": time.time(),
+            "progressive_analysis": {
+                # 检测原始字符
+                "has_slash": "/" in path,
+                "has_space": " " in path,
+                "has_percent": "%" in path,
+                
+                # 检测1层编码残留
+                "has_percent_2F": "%2F" in path.upper(),
+                "has_percent_20": "%20" in path,
+                "has_percent_25": "%25" in path,
+                
+                # 检测2层编码残留
+                "has_percent_252F": "%252F" in path.upper(),
+                "has_percent_2520": "%2520" in path,
+                "has_percent_2525": "%2525" in path,
+                
+                # 检测3层编码残留
+                "has_percent_25252F": "%25252F" in path.upper(),
+                "has_percent_252520": "%252520" in path,
+                "has_percent_252525": "%252525" in path,
+            }
+        }
+        
+        # 分析解码行为
+        analysis = results["progressive_analysis"]
+        decode_behavior = []
+        
+        # 分析斜杠解码
+        if analysis["has_slash"]:
+            if "1layer" in path:
+                decode_behavior.append("1层编码的%2F被完全解码为/")
+            elif "2layer" in path:
+                decode_behavior.append("2层编码被解码到原始字符/")
+            elif "3layer" in path:
+                decode_behavior.append("3层编码被解码到原始字符/")
+        elif analysis["has_percent_2F"]:
+            if "2layer" in path:
+                decode_behavior.append("2层编码的%252F被解码1层为%2F")
+            elif "3layer" in path:
+                decode_behavior.append("3层编码被解码到1层编码%2F")
+        elif analysis["has_percent_252F"]:
+            if "3layer" in path:
+                decode_behavior.append("3层编码的%25252F被解码1层为%252F")
+        elif analysis["has_percent_25252F"]:
+            decode_behavior.append("3层编码保持不变")
+            
+        # 推断nginx解码策略
+        if analysis["has_slash"] and ("1layer" in path):
+            nginx_strategy = "单次完全解码"
+        elif analysis["has_percent_2F"] and ("2layer" in path):
+            nginx_strategy = "单次解码一层"
+        elif analysis["has_percent_252F"] and ("3layer" in path):
+            nginx_strategy = "单次解码一层"
+        else:
+            nginx_strategy = "未知或无解码"
+            
+        results["decode_behavior"] = decode_behavior
+        results["nginx_strategy"] = nginx_strategy
         
         return web.json_response(results)
 

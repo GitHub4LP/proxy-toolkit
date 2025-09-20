@@ -58,6 +58,11 @@ class PortApp {
             // 检测多层编码 - 测试 nginx 递归解码深度
             await this.testMultiEncoding(testInfo.multi_encoding_test_path);
             
+            // 渐进式编码检测 - 测试1层、2层、3层编码
+            if (testInfo.progressive_encoding_tests) {
+                await this.testProgressiveEncoding(testInfo.progressive_encoding_tests);
+            }
+            
             // 综合判断
             this.needsUrlEncoding = this.needsChineseEncoding || this.needsSlashEncoding || this.needsPercentEncoding || this.needsDoubleEncoding;
             
@@ -232,18 +237,26 @@ class PortApp {
                 // 分析 nginx 解码深度
                 if (result.decode_depth !== undefined) {
                     this.nginxDecodeDepth = result.decode_depth;
-                    console.log(`[多层编码检测] nginx 解码深度: ${this.nginxDecodeDepth}`);
+                    this.recommendedEncodingLayers = result.recommended_encoding_layers || (this.nginxDecodeDepth + 2);
                     
-                    // 根据解码深度推荐编码层数
-                    if (this.nginxDecodeDepth >= 3) {
-                        this.recommendedEncodingLayers = this.nginxDecodeDepth + 2;
-                    } else if (this.nginxDecodeDepth >= 1) {
-                        this.recommendedEncodingLayers = this.nginxDecodeDepth + 1;
-                    } else {
-                        this.recommendedEncodingLayers = 1;
+                    console.log(`[多层编码检测] nginx 解码深度: ${this.nginxDecodeDepth}`);
+                    console.log(`[多层编码检测] 推荐编码层数: ${this.recommendedEncodingLayers}`);
+                    
+                    // 显示详细的解码分析
+                    if (result.decode_analysis && result.decode_analysis.length > 0) {
+                        console.log(`[多层编码检测] 解码分析:`);
+                        result.decode_analysis.forEach(analysis => {
+                            console.log(`  - ${analysis}`);
+                        });
                     }
                     
-                    console.log(`[多层编码检测] 推荐编码层数: ${this.recommendedEncodingLayers}`);
+                    // 显示检测到的编码层次
+                    if (result.encoding_layers_detected && result.encoding_layers_detected.length > 0) {
+                        console.log(`[多层编码检测] 检测到的编码层次:`);
+                        result.encoding_layers_detected.forEach(layer => {
+                            console.log(`  - ${layer}`);
+                        });
+                    }
                 } else {
                     console.log('[多层编码检测] 未获取到解码深度信息');
                     this.nginxDecodeDepth = 0;
@@ -264,6 +277,127 @@ class PortApp {
             console.log('[多层编码检测] 请求异常:', error.message);
             this.nginxDecodeDepth = 0;
             this.recommendedEncodingLayers = 2;
+        }
+    }
+
+    async testProgressiveEncoding(progressiveTests) {
+        console.log('[渐进式编码检测] 开始测试 1-3 层编码...');
+        
+        const results = {};
+        
+        // 测试1层编码
+        if (progressiveTests.layer_1) {
+            console.log('[渐进式编码检测] 测试1层编码:', progressiveTests.layer_1);
+            try {
+                const response = await fetch(`${this.basePath}${progressiveTests.layer_1}`);
+                if (response.ok) {
+                    const result = await response.json();
+                    results.layer_1 = result;
+                    console.log('[渐进式编码检测] 1层编码结果:', result.nginx_strategy);
+                } else {
+                    console.log('[渐进式编码检测] 1层编码请求失败:', response.status);
+                }
+            } catch (error) {
+                console.log('[渐进式编码检测] 1层编码异常:', error.message);
+            }
+        }
+        
+        // 测试2层编码
+        if (progressiveTests.layer_2) {
+            console.log('[渐进式编码检测] 测试2层编码:', progressiveTests.layer_2);
+            try {
+                const response = await fetch(`${this.basePath}${progressiveTests.layer_2}`);
+                if (response.ok) {
+                    const result = await response.json();
+                    results.layer_2 = result;
+                    console.log('[渐进式编码检测] 2层编码结果:', result.nginx_strategy);
+                } else {
+                    console.log('[渐进式编码检测] 2层编码请求失败:', response.status);
+                }
+            } catch (error) {
+                console.log('[渐进式编码检测] 2层编码异常:', error.message);
+            }
+        }
+        
+        // 测试3层编码
+        if (progressiveTests.layer_3) {
+            console.log('[渐进式编码检测] 测试3层编码:', progressiveTests.layer_3);
+            try {
+                const response = await fetch(`${this.basePath}${progressiveTests.layer_3}`);
+                if (response.ok) {
+                    const result = await response.json();
+                    results.layer_3 = result;
+                    console.log('[渐进式编码检测] 3层编码结果:', result.nginx_strategy);
+                } else {
+                    console.log('[渐进式编码检测] 3层编码请求失败:', response.status);
+                }
+            } catch (error) {
+                console.log('[渐进式编码检测] 3层编码异常:', error.message);
+            }
+        }
+        
+        // 分析nginx解码策略
+        this.analyzeNginxDecodingStrategy(results);
+    }
+
+    analyzeNginxDecodingStrategy(progressiveResults) {
+        console.log('[nginx解码策略分析] 开始分析...');
+        
+        let decodingStrategy = '未知';
+        let confidence = '低';
+        
+        // 分析1层编码结果
+        if (progressiveResults.layer_1) {
+            const layer1Strategy = progressiveResults.layer_1.nginx_strategy;
+            console.log(`[nginx解码策略分析] 1层编码策略: ${layer1Strategy}`);
+            
+            if (layer1Strategy === '单次完全解码') {
+                decodingStrategy = '单次完全解码';
+                confidence = '高';
+            }
+        }
+        
+        // 分析2层编码结果
+        if (progressiveResults.layer_2) {
+            const layer2Strategy = progressiveResults.layer_2.nginx_strategy;
+            console.log(`[nginx解码策略分析] 2层编码策略: ${layer2Strategy}`);
+            
+            if (layer2Strategy === '单次解码一层') {
+                if (decodingStrategy === '单次完全解码') {
+                    // 矛盾：1层完全解码，2层只解码一层
+                    decodingStrategy = '单次解码一层';
+                    confidence = '中';
+                } else {
+                    decodingStrategy = '单次解码一层';
+                    confidence = '高';
+                }
+            } else if (layer2Strategy === '单次完全解码') {
+                decodingStrategy = '递归解码';
+                confidence = '高';
+            }
+        }
+        
+        // 分析3层编码结果
+        if (progressiveResults.layer_3) {
+            const layer3Strategy = progressiveResults.layer_3.nginx_strategy;
+            console.log(`[nginx解码策略分析] 3层编码策略: ${layer3Strategy}`);
+            
+            if (layer3Strategy === '单次解码一层' && decodingStrategy === '单次解码一层') {
+                confidence = '很高';
+            }
+        }
+        
+        console.log(`[nginx解码策略分析] 最终结论: ${decodingStrategy} (置信度: ${confidence})`);
+        
+        // 根据策略调整编码建议
+        if (decodingStrategy === '单次解码一层') {
+            console.log('[nginx解码策略分析] 建议: 使用2层编码即可绕过nginx解码');
+            this.recommendedEncodingLayers = 2;
+        } else if (decodingStrategy === '递归解码') {
+            console.log('[nginx解码策略分析] 建议: 需要使用更多层编码');
+            this.recommendedEncodingLayers = Math.max(this.nginxDecodeDepth + 2, 3);
+        } else {
+            console.log('[nginx解码策略分析] 建议: 保持默认编码策略');
         }
     }
 
