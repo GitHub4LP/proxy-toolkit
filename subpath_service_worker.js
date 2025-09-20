@@ -104,28 +104,39 @@ self.addEventListener('fetch', event => {
                             break;
                         }
                     }
+                    // 在路径匹配判断之前，先检查是否需要 %2F 双重编码
+                    if (NEEDS_SLASH_ENCODING && requestUrl.pathname.includes('%2F')) {
+                        console.log(`[SW] 检测到 %2F，进行双重编码处理: ${requestUrl.pathname}`);
+                        const encodedUrl = selectiveDoubleEncodeUrl(requestUrl.toString());
+                        if (encodedUrl !== requestUrl.toString()) {
+                            if (event.request.method === 'GET') {
+                                return Response.redirect(encodedUrl, 302);
+                            } else {
+                                const modifiedRequest = new Request(encodedUrl, {
+                                    ...event.request,
+                                    method: event.request.method,
+                                    headers: event.request.headers,
+                                    body: event.request.body,
+                                    redirect: event.request.redirect,
+                                    referrer: event.request.referrer,
+                                    integrity: event.request.integrity,
+                                    signal: event.request.signal,
+                                    duplex: 'half',
+                                });
+                                return fetch(modifiedRequest);
+                            }
+                        }
+                    }
+                    
                     if (matchedPath) {
                         const lcp = longestCommonPrefix(matchedPath, requestUrl.pathname);
                         if (lcp !== matchedPath) {
                             if (event.request.method === 'GET') {
                                 const newUrl = new URL(event.request.url);
                                 newUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
-                                
-                                // 暂时只处理 %2F 双重编码
-                                if (NEEDS_SLASH_ENCODING) {
-                                    const encodedUrl = selectiveDoubleEncodeUrl(newUrl.toString());
-                                    return Response.redirect(encodedUrl, 302);
-                                }
-                                
                                 return Response.redirect(newUrl.href, 302);
                             } else {
                                 requestUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
-                                
-                                // 暂时只处理 %2F 双重编码
-                                if (NEEDS_SLASH_ENCODING) {
-                                    requestUrl = new URL(selectiveDoubleEncodeUrl(requestUrl.toString()));
-                                }
-                                
                                 const modifiedRequest = new Request(requestUrl, {
                                     ...event.request,
                                     method: event.request.method,
