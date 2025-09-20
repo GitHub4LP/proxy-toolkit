@@ -58,7 +58,7 @@ function selectiveMultiEncodeUrl(url) {
             }
             
             if (needsEncoding) {
-                const layers = Math.max( NGINX_DECODE_DEPTH + 1);
+                const layers = NGINX_DECODE_DEPTH;
                 const encoded = multiLayerEncodeSegment(segment, layers);
                 console.log(`[SW] 检测到 ${encodingReason.trim()}，对段进行 ${layers} 层编码: ${segment} → ${encoded}`);
                 return encoded;
