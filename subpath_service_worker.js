@@ -10,7 +10,11 @@ function hasEncodedChars(str) {
     return /%[0-9A-Fa-f]{2}/.test(str);
 }
 
-
+function isAlreadyMultiLayerEncoded(str) {
+    // 检测是否已经被多层编码（包含 %25XX 模式）
+    // %25XX 表示 % 字符被编码为 %25，这是多层编码的特征
+    return /%25[0-9A-Fa-f]{2}/.test(str);
+}
 
 function multiLayerEncodeSegment(segment, layers) {
     // 多层编码函数
@@ -28,11 +32,17 @@ function selectiveMultiEncodeUrl(url) {
         const segments = originalPath.split('/');
         
         const encodedSegments = segments.map(segment => {
-            // 如果 nginx 有解码深度且段包含已编码字符，进行多层编码
-            if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(segment)) {
+            // 如果 nginx 有解码深度且段包含已编码字符，但不是已经多层编码的，进行多层编码
+            if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(segment) && !isAlreadyMultiLayerEncoded(segment)) {
                 const encoded = multiLayerEncodeSegment(segment, NGINX_DECODE_DEPTH);
-                console.log(`[SW] 检测到已编码字符，进行 ${NGINX_DECODE_DEPTH} 层编码: ${segment} → ${encoded}`);
+                console.log(`[SW] 检测到原始编码字符，进行 ${NGINX_DECODE_DEPTH} 层编码: ${segment} → ${encoded}`);
                 return encoded;
+            }
+            
+            // 如果已经是多层编码，跳过处理
+            if (isAlreadyMultiLayerEncoded(segment)) {
+                console.log(`[SW] 检测到已多层编码，跳过处理: ${segment}`);
+                return segment;
             }
             
             return segment;
@@ -105,9 +115,14 @@ self.addEventListener('fetch', event => {
                         let finalPathname = requestUrl.pathname;
                         
                         // 1. 编码处理
-                        const needsEncoding = NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname);
-                        if (needsEncoding) {
-                            console.log(`[SW] 检测到需要编码的字符，进行多层编码处理: ${finalPathname}`);
+                        const hasEncoded = hasEncodedChars(finalPathname);
+                        const isMultiLayer = isAlreadyMultiLayerEncoded(finalPathname);
+                        const needsEncoding = NGINX_DECODE_DEPTH > 0 && hasEncoded && !isMultiLayer;
+                        
+                        if (hasEncoded && isMultiLayer) {
+                            console.log(`[SW] 检测到已多层编码，跳过处理: ${finalPathname}`);
+                        } else if (needsEncoding) {
+                            console.log(`[SW] 检测到原始编码字符，进行多层编码处理: ${finalPathname}`);
                             const tempUrl = new URL(requestUrl);
                             const encodedUrl = selectiveMultiEncodeUrl(tempUrl.toString());
                             if (encodedUrl !== tempUrl.toString()) {
