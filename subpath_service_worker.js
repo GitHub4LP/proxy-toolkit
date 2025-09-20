@@ -1,7 +1,7 @@
 // 编码配置 - 由后端模板替换
 const NEEDS_CHINESE_ENCODING = {{NEEDS_CHINESE_ENCODING}};
-const NEEDS_SLASH_ENCODING = {{NEEDS_SLASH_ENCODING}};
-const NEEDS_PERCENT_ENCODING = {{NEEDS_PERCENT_ENCODING}};
+const NGINX_DECODE_DEPTH = {{NGINX_DECODE_DEPTH}};
+const ENCODING_LAYERS = {{ENCODING_LAYERS}};
 
 const scope = new URL(self.registration.scope).pathname
 let registeredPaths = new Set([scope]);
@@ -27,29 +27,43 @@ function hasPercentEncodedChars(str) {
     return /%25/i.test(str);
 }
 
-function selectiveDoubleEncodeUrl(url) {
+function multiLayerEncodeSegment(segment, layers) {
+    // 多层编码函数
+    let encoded = segment;
+    for (let i = 0; i < layers; i++) {
+        encoded = encodeURIComponent(encoded);
+    }
+    return encoded;
+}
+
+function selectiveMultiEncodeUrl(url) {
     try {
         const urlObj = new URL(url);
         const originalPath = urlObj.pathname;
         const segments = originalPath.split('/');
         
         const encodedSegments = segments.map(segment => {
-            // 检查 %2F 编码需求
-            if (NEEDS_SLASH_ENCODING && hasSlashEncodedChars(segment)) {
-                console.log(`[SW] 检测到 %2F，对段进行双重编码: ${segment}`);
-                return encodeURIComponent(segment);
+            let needsEncoding = false;
+            let encodingReason = '';
+            
+            // 检查中文编码需求
+            if (NEEDS_CHINESE_ENCODING && hasChineseEncodedChars(segment)) {
+                needsEncoding = true;
+                encodingReason += 'Chinese ';
             }
             
-            // 检查 %25 编码需求
-            if (NEEDS_PERCENT_ENCODING && hasPercentEncodedChars(segment)) {
-                console.log(`[SW] 检测到 %25，对段进行双重编码: ${segment}`);
-                return encodeURIComponent(segment);
+            // 如果 nginx 有解码深度，对特殊字符进行编码
+            if (NGINX_DECODE_DEPTH > 0 && (hasSlashEncodedChars(segment) || hasPercentEncodedChars(segment))) {
+                needsEncoding = true;
+                encodingReason += 'Special ';
             }
             
-            // 中文编码暂时关闭
-            // if (NEEDS_CHINESE_ENCODING && hasChineseEncodedChars(segment)) {
-            //     return encodeURIComponent(segment);
-            // }
+            if (needsEncoding) {
+                const layers = Math.max(ENCODING_LAYERS || 2, NGINX_DECODE_DEPTH + 1);
+                const encoded = multiLayerEncodeSegment(segment, layers);
+                console.log(`[SW] 检测到 ${encodingReason.trim()}，对段进行 ${layers} 层编码: ${segment} → ${encoded}`);
+                return encoded;
+            }
             
             return segment;
         });
@@ -57,7 +71,7 @@ function selectiveDoubleEncodeUrl(url) {
         const newPath = encodedSegments.join('/');
         if (newPath !== originalPath) {
             urlObj.pathname = newPath;
-            console.log(`[SW] %2F 双重编码: ${originalPath} → ${newPath}`);
+            console.log(`[SW] 多层编码处理: ${originalPath} → ${newPath}`);
         }
         
         return urlObj.toString();
@@ -121,8 +135,8 @@ self.addEventListener('fetch', event => {
                                          (NEEDS_PERCENT_ENCODING && requestUrl.pathname.includes('%25'));
                     
                     if (needsEncoding) {
-                        console.log(`[SW] 检测到需要编码的字符，进行双重编码处理: ${requestUrl.pathname}`);
-                        const encodedUrl = selectiveDoubleEncodeUrl(requestUrl.toString());
+                        console.log(`[SW] 检测到需要编码的字符，进行多层编码处理: ${requestUrl.pathname}`);
+                        const encodedUrl = selectiveMultiEncodeUrl(requestUrl.toString());
                         if (encodedUrl !== requestUrl.toString()) {
                             if (event.request.method === 'GET') {
                                 return Response.redirect(encodedUrl, 302);

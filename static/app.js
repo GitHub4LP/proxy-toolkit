@@ -6,9 +6,6 @@ class PortApp {
         this.addPortTimeout = null; // 防抖定时器
         this.needsUrlEncoding = null; // nginx 编码检测结果
         this.needsChineseEncoding = false; // 中文字符是否需要编码
-        this.needsSlashEncoding = false; // %2F 是否需要编码
-        this.needsPercentEncoding = false; // %25 是否需要编码
-        this.needsDoubleEncoding = false; // 双重编码是否需要处理
         this.nginxDecodeDepth = 0; // nginx 解码深度
         this.recommendedEncodingLayers = 2; // 推荐编码层数
         this.setupPortInput();
@@ -46,31 +43,16 @@ class PortApp {
             // 检测中文字符编码
             await this.testChineseEncoding(testInfo.chinese_test_path);
             
-            // 检测 %2F 编码
-            await this.testSlashEncoding(testInfo.slash_test_path);
-            
-            // 检测 %25 编码
-            await this.testPercentEncoding(testInfo.percent_test_path);
-            
-            // 检测双重编码
-            await this.testDoubleEncoding(testInfo.double_encoding_test_path);
-            
-            // 检测多层编码 - 测试 nginx 递归解码深度
-            await this.testMultiEncoding(testInfo.multi_encoding_test_path);
-            
             // 渐进式编码检测 - 测试1层、2层、3层编码
             if (testInfo.progressive_encoding_tests) {
                 await this.testProgressiveEncoding(testInfo.progressive_encoding_tests);
             }
             
             // 综合判断
-            this.needsUrlEncoding = this.needsChineseEncoding || this.needsSlashEncoding || this.needsPercentEncoding || this.needsDoubleEncoding;
+            this.needsUrlEncoding = this.needsChineseEncoding || this.nginxDecodeDepth > 0;
             
             console.log('[编码检测] 检测完成:');
             console.log('  - 中文字符需要编码:', this.needsChineseEncoding);
-            console.log('  - %2F 需要编码:', this.needsSlashEncoding);
-            console.log('  - %25 需要编码:', this.needsPercentEncoding);
-            console.log('  - 双重编码需要处理:', this.needsDoubleEncoding);
             console.log('  - nginx 解码深度:', this.nginxDecodeDepth);
             console.log('  - 推荐编码层数:', this.recommendedEncodingLayers);
             console.log('  - 总体需要URL编码:', this.needsUrlEncoding);
@@ -80,9 +62,6 @@ class PortApp {
             console.log('[编码检测] 异常类型:', error.constructor.name);
             console.log('[编码检测] 异常消息:', error.message);
             this.needsChineseEncoding = false;
-            this.needsSlashEncoding = false;
-            this.needsPercentEncoding = false;
-            this.needsDoubleEncoding = false;
             this.nginxDecodeDepth = 0;
             this.recommendedEncodingLayers = 2;
             this.needsUrlEncoding = false; // 异常时默认不启用编码
@@ -117,168 +96,7 @@ class PortApp {
         }
     }
 
-    async testSlashEncoding(testPath) {
-        console.log('[%2F编码检测] 测试路径:', testPath);
-        console.log('[%2F编码检测] 完整URL:', `${this.basePath}${testPath}`);
-        
-        try {
-            const testResponse = await fetch(`${this.basePath}${testPath}`);
-            console.log('[%2F编码检测] 响应状态:', testResponse.status);
-            
-            if (testResponse.ok) {
-                const result = await testResponse.json();
-                console.log('[%2F编码检测] 响应内容:', result);
-                
-                // 检查 %2F 是否被自动解码为 /
-                if (result.contains_slash) {
-                    console.log('[%2F编码检测] %2F 被自动解码为 / - 需要编码处理');
-                    this.needsSlashEncoding = true;
-                } else {
-                    console.log('[%2F编码检测] %2F 保持编码状态 - 正常');
-                    this.needsSlashEncoding = false;
-                }
-                
-            } else if (testResponse.status === 400) {
-                console.log('[%2F编码检测] 400错误 - 可能是路径解析问题');
-                this.needsSlashEncoding = true;
-                
-            } else {
-                console.log('[%2F编码检测] 其他错误，状态码:', testResponse.status);
-                this.needsSlashEncoding = false;
-            }
-        } catch (error) {
-            console.log('[%2F编码检测] 请求异常:', error.message);
-            this.needsSlashEncoding = false;
-        }
-    }
 
-    async testPercentEncoding(testPath) {
-        console.log('[%25编码检测] 测试路径:', testPath);
-        console.log('[%25编码检测] 完整URL:', `${this.basePath}${testPath}`);
-        
-        try {
-            const testResponse = await fetch(`${this.basePath}${testPath}`);
-            console.log('[%25编码检测] 响应状态:', testResponse.status);
-            
-            if (testResponse.ok) {
-                const result = await testResponse.json();
-                console.log('[%25编码检测] 响应内容:', result);
-                
-                // 检查 %25 是否被自动解码为 %
-                if (result.has_percent) {
-                    console.log('[%25编码检测] %25 被自动解码为 % - 需要编码处理');
-                    this.needsPercentEncoding = true;
-                } else {
-                    console.log('[%25编码检测] %25 保持编码状态 - 正常');
-                    this.needsPercentEncoding = false;
-                }
-                
-            } else if (testResponse.status === 400) {
-                console.log('[%25编码检测] 400错误 - 可能是路径解析问题');
-                this.needsPercentEncoding = true;
-                
-            } else {
-                console.log('[%25编码检测] 其他错误，状态码:', testResponse.status);
-                this.needsPercentEncoding = false;
-            }
-        } catch (error) {
-            console.log('[%25编码检测] 请求异常:', error.message);
-            this.needsPercentEncoding = false;
-        }
-    }
-
-    async testDoubleEncoding(testPath) {
-        console.log('[双重编码检测] 测试路径:', testPath);
-        console.log('[双重编码检测] 完整URL:', `${this.basePath}${testPath}`);
-        
-        try {
-            const testResponse = await fetch(`${this.basePath}${testPath}`);
-            console.log('[双重编码检测] 响应状态:', testResponse.status);
-            
-            if (testResponse.ok) {
-                const result = await testResponse.json();
-                console.log('[双重编码检测] 响应内容:', result);
-                
-                // 检查是否检测到双重解码
-                if (result.double_decode_detected && result.double_decode_detected !== 'none') {
-                    console.log(`[双重编码检测] 检测到双重解码: ${result.double_decode_detected} - 需要处理`);
-                    this.needsDoubleEncoding = true;
-                } else {
-                    console.log('[双重编码检测] 未检测到双重解码 - 正常');
-                    this.needsDoubleEncoding = false;
-                }
-                
-            } else if (testResponse.status === 400) {
-                console.log('[双重编码检测] 400错误 - 可能存在双重解码问题');
-                this.needsDoubleEncoding = true;
-                
-            } else {
-                console.log('[双重编码检测] 其他错误，状态码:', testResponse.status);
-                this.needsDoubleEncoding = false;
-            }
-        } catch (error) {
-            console.log('[双重编码检测] 请求异常:', error.message);
-            this.needsDoubleEncoding = false;
-        }
-    }
-
-    async testMultiEncoding(testPath) {
-        console.log('[多层编码检测] 测试路径:', testPath);
-        console.log('[多层编码检测] 完整URL:', `${this.basePath}${testPath}`);
-        
-        try {
-            const testResponse = await fetch(`${this.basePath}${testPath}`);
-            console.log('[多层编码检测] 响应状态:', testResponse.status);
-            
-            if (testResponse.ok) {
-                const result = await testResponse.json();
-                console.log('[多层编码检测] 响应内容:', result);
-                
-                // 分析 nginx 解码深度
-                if (result.decode_depth !== undefined) {
-                    this.nginxDecodeDepth = result.decode_depth;
-                    this.recommendedEncodingLayers = result.recommended_encoding_layers || (this.nginxDecodeDepth + 2);
-                    
-                    console.log(`[多层编码检测] nginx 解码深度: ${this.nginxDecodeDepth}`);
-                    console.log(`[多层编码检测] 推荐编码层数: ${this.recommendedEncodingLayers}`);
-                    
-                    // 显示详细的解码分析
-                    if (result.decode_analysis && result.decode_analysis.length > 0) {
-                        console.log(`[多层编码检测] 解码分析:`);
-                        result.decode_analysis.forEach(analysis => {
-                            console.log(`  - ${analysis}`);
-                        });
-                    }
-                    
-                    // 显示检测到的编码层次
-                    if (result.encoding_layers_detected && result.encoding_layers_detected.length > 0) {
-                        console.log(`[多层编码检测] 检测到的编码层次:`);
-                        result.encoding_layers_detected.forEach(layer => {
-                            console.log(`  - ${layer}`);
-                        });
-                    }
-                } else {
-                    console.log('[多层编码检测] 未获取到解码深度信息');
-                    this.nginxDecodeDepth = 0;
-                    this.recommendedEncodingLayers = 2;
-                }
-                
-            } else if (testResponse.status === 400) {
-                console.log('[多层编码检测] 400错误 - 可能存在多层解码问题');
-                this.nginxDecodeDepth = 1; // 至少有一层解码
-                this.recommendedEncodingLayers = 3;
-                
-            } else {
-                console.log('[多层编码检测] 其他错误，状态码:', testResponse.status);
-                this.nginxDecodeDepth = 0;
-                this.recommendedEncodingLayers = 2;
-            }
-        } catch (error) {
-            console.log('[多层编码检测] 请求异常:', error.message);
-            this.nginxDecodeDepth = 0;
-            this.recommendedEncodingLayers = 2;
-        }
-    }
 
     async testProgressiveEncoding(progressiveTests) {
         console.log('[渐进式编码检测] 开始测试 1-3 层编码...');
@@ -867,10 +685,9 @@ class PortApp {
             }
             
             // 使用模板 Service Worker，通过 URL 参数传递编码配置
-            // 暂时关闭中文编码，处理 %2F 和 %25 编码，以及多层编码
-            const swScriptPath = `${this.basePath}/subpath_service_worker.js?chinese=false&slash=${this.needsSlashEncoding}&percent=${this.needsPercentEncoding}&decode_depth=${this.nginxDecodeDepth}&encoding_layers=${this.recommendedEncodingLayers}`;
+            const swScriptPath = `${this.basePath}/subpath_service_worker.js?chinese=${this.needsChineseEncoding}&decode_depth=${this.nginxDecodeDepth}&encoding_layers=${this.recommendedEncodingLayers}`;
             
-            console.log(`[SW注册] 使用模板 Service Worker，中文编码: ${this.needsChineseEncoding} (暂时关闭)，%2F编码: ${this.needsSlashEncoding}，%25编码: ${this.needsPercentEncoding}，解码深度: ${this.nginxDecodeDepth}，编码层数: ${this.recommendedEncodingLayers}`);
+            console.log(`[SW注册] 使用模板 Service Worker，中文编码: ${this.needsChineseEncoding}，解码深度: ${this.nginxDecodeDepth}，编码层数: ${this.recommendedEncodingLayers}`);
             
             // 注册 Service Worker
             const registration = await navigator.serviceWorker.register(
