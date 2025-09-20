@@ -100,28 +100,37 @@ self.addEventListener('fetch', event => {
                             break;
                         }
                     }
-                    // 在路径匹配判断之前，先检查是否需要编码处理
-                    const needsEncoding = NGINX_DECODE_DEPTH > 0 && hasEncodedChars(requestUrl.pathname);
-                    
-                    if (needsEncoding) {
-                        console.log(`[SW] 检测到需要编码的字符，进行多层编码处理: ${requestUrl.pathname}`);
-                        const encodedUrl = selectiveMultiEncodeUrl(requestUrl.toString());
-                        if (encodedUrl !== requestUrl.toString()) {
-                            // 更新 requestUrl 用于后续处理
-                            requestUrl = new URL(encodedUrl);
-                        }
-                    }
-                    
                     if (matchedPath) {
-                        const lcp = longestCommonPrefix(matchedPath, requestUrl.pathname);
+                        // 综合处理 pathname：编码处理 + 路径匹配
+                        let finalPathname = requestUrl.pathname;
+                        
+                        // 1. 编码处理
+                        const needsEncoding = NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname);
+                        if (needsEncoding) {
+                            console.log(`[SW] 检测到需要编码的字符，进行多层编码处理: ${finalPathname}`);
+                            const tempUrl = new URL(requestUrl);
+                            const encodedUrl = selectiveMultiEncodeUrl(tempUrl.toString());
+                            if (encodedUrl !== tempUrl.toString()) {
+                                finalPathname = new URL(encodedUrl).pathname;
+                            }
+                        }
+                        
+                        // 2. 路径匹配处理
+                        const lcp = longestCommonPrefix(matchedPath, finalPathname);
                         if (lcp !== matchedPath) {
+                            finalPathname = finalPathname.replace(lcp, matchedPath);
+                        }
+                        
+                        // 3. 如果 pathname 有变化，创建新请求
+                        if (finalPathname !== requestUrl.pathname) {
                             if (event.request.method === 'GET') {
                                 const newUrl = new URL(event.request.url);
-                                newUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
+                                newUrl.pathname = finalPathname;
                                 return Response.redirect(newUrl.href, 302);
                             } else {
-                                requestUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
-                                const modifiedRequest = new Request(requestUrl, {
+                                const finalUrl = new URL(requestUrl);
+                                finalUrl.pathname = finalPathname;
+                                const modifiedRequest = new Request(finalUrl, {
                                     ...event.request,
                                     method: event.request.method,
                                     headers: event.request.headers,
