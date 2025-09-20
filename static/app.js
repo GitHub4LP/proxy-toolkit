@@ -37,7 +37,7 @@ class PortApp {
             // 综合判断
             this.needsUrlEncoding = this.nginxDecodeDepth > 0;
             
-            console.log(`[编码检测] nginx解码深度: ${this.nginxDecodeDepth}, 需要编码: ${this.needsUrlEncoding}`);
+            console.log(`[编码检测] NGINX_DECODE_DEPTH: ${this.nginxDecodeDepth}`);
             
         } catch (error) {
             console.error('[编码检测] 发生异常:', error);
@@ -51,29 +51,23 @@ class PortApp {
 
 
     async testProgressiveEncoding(basePath, maxLayers) {
-        let maxDetectedDepth = 0;
-        let layer = 1;
-        let consecutiveZeros = 0;
-        
-        // 逐步检测，智能停止条件
-        while (layer <= maxLayers && consecutiveZeros < 2) {
+        // 并行检测所有层级
+        const testPromises = [];
+        for (let layer = 1; layer <= maxLayers; layer++) {
             const testPath = this.generateTestPath(basePath, layer);
-            const depth = await this.testSingleLayer(testPath, layer);
-            
-            if (depth > 0) {
-                maxDetectedDepth = Math.max(maxDetectedDepth, depth);
-                consecutiveZeros = 0;
-            } else {
-                consecutiveZeros++;
-            }
-            
-            layer++;
-            
-            // 提前停止优化
-            if (maxDetectedDepth >= 3 && consecutiveZeros >= 1) {
-                break;
-            }
+            testPromises.push(this.testSingleLayer(testPath, layer));
         }
+        
+        // 等待所有测试完成
+        const results = await Promise.allSettled(testPromises);
+        
+        // 找到最大解码深度
+        let maxDetectedDepth = 0;
+        results.forEach(result => {
+            if (result.status === 'fulfilled' && result.value > 0) {
+                maxDetectedDepth = Math.max(maxDetectedDepth, result.value);
+            }
+        });
         
         this.nginxDecodeDepth = maxDetectedDepth;
     }
