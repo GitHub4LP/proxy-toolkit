@@ -1,7 +1,6 @@
 // 编码配置 - 由后端模板替换
 const NEEDS_CHINESE_ENCODING = {{NEEDS_CHINESE_ENCODING}};
 const NGINX_DECODE_DEPTH = {{NGINX_DECODE_DEPTH}};
-const ENCODING_LAYERS = {{ENCODING_LAYERS}};
 
 const scope = new URL(self.registration.scope).pathname
 let registeredPaths = new Set([scope]);
@@ -59,7 +58,7 @@ function selectiveMultiEncodeUrl(url) {
             }
             
             if (needsEncoding) {
-                const layers = Math.max(ENCODING_LAYERS || 2, NGINX_DECODE_DEPTH + 1);
+                const layers = Math.max( NGINX_DECODE_DEPTH + 1);
                 const encoded = multiLayerEncodeSegment(segment, layers);
                 console.log(`[SW] 检测到 ${encodingReason.trim()}，对段进行 ${layers} 层编码: ${segment} → ${encoded}`);
                 return encoded;
