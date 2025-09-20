@@ -31,17 +31,13 @@ class PortApp {
 
     async detectNginxEncoding() {
         try {
-            console.log('[编码检测] 开始检测 nginx 编码行为...');
-            
             // 直接开始渐进式编码检测，无需额外请求
             await this.testProgressiveEncoding('/api/test-progressive-encoding/', 5);
             
             // 综合判断
             this.needsUrlEncoding = this.nginxDecodeDepth > 0;
             
-            console.log('[编码检测] 检测完成:');
-            console.log('  - nginx 解码深度:', this.nginxDecodeDepth);
-            console.log('  - 总体需要URL编码:', this.needsUrlEncoding);
+            console.log(`[编码检测] nginx解码深度: ${this.nginxDecodeDepth}, 需要编码: ${this.needsUrlEncoding}`);
             
         } catch (error) {
             console.error('[编码检测] 发生异常:', error);
@@ -55,40 +51,31 @@ class PortApp {
 
 
     async testProgressiveEncoding(basePath, maxLayers) {
-        console.log('[编码检测] 逐步检测 nginx 解码深度...');
-        
         let maxDetectedDepth = 0;
         let layer = 1;
-        let consecutiveZeros = 0;  // 连续检测到0的次数
+        let consecutiveZeros = 0;
         
         // 逐步检测，智能停止条件
         while (layer <= maxLayers && consecutiveZeros < 2) {
-            console.log(`[编码检测] 测试第${layer}层编码...`);
-            
-            // 前端生成测试路径
             const testPath = this.generateTestPath(basePath, layer);
             const depth = await this.testSingleLayer(testPath, layer);
             
             if (depth > 0) {
                 maxDetectedDepth = Math.max(maxDetectedDepth, depth);
-                consecutiveZeros = 0;  // 重置计数器
-                console.log(`[编码检测] 第${layer}层检测到解码深度: ${depth}`);
+                consecutiveZeros = 0;
             } else {
                 consecutiveZeros++;
-                console.log(`[编码检测] 第${layer}层未检测到解码 (连续${consecutiveZeros}次)`);
             }
             
             layer++;
             
-            // 如果已经检测到很深的解码深度，可以适当提前停止
+            // 提前停止优化
             if (maxDetectedDepth >= 3 && consecutiveZeros >= 1) {
-                console.log(`[编码检测] 已检测到足够深度(${maxDetectedDepth})，提前停止`);
                 break;
             }
         }
         
         this.nginxDecodeDepth = maxDetectedDepth;
-        console.log(`[编码检测] 最终检测到的 nginx 解码深度: ${maxDetectedDepth}`);
     }
     
     generateTestPath(basePath, layer) {
@@ -109,7 +96,7 @@ class PortApp {
                 return result.decode_depth;
             }
         } catch (error) {
-            console.warn(`[编码检测] 第${layer}层测试失败:`, error.message);
+            // 测试失败，静默处理
         }
         return 0;
     }
