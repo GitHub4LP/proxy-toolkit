@@ -66,6 +66,7 @@ class PortServer:
         self.app.router.add_get("/api/test-slash-encoding/{path:.*}", self.test_slash_encoding_handler)
         self.app.router.add_get("/api/test-percent-encoding/{path:.*}", self.test_percent_encoding_handler)
         self.app.router.add_get("/api/test-general-encoding/{path:.*}", self.test_general_encoding_handler)
+        self.app.router.add_get("/api/test-double-encoding/{path:.*}", self.test_double_encoding_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
 
@@ -116,7 +117,8 @@ class PortServer:
             "slash_test_path": "/api/test-slash-encoding/test%2Fpath",
             "percent_test_path": "/api/test-percent-encoding/test%25percent",
             "general_test_path": "/api/test-general-encoding/test%2Fslash%25percent%20space",
-            "description": "测试 nginx 是否自动解码 URL - 包括中文、%2F、%25等"
+            "double_encoding_test_path": "/api/test-double-encoding/file%2520name%252Fpath%2525test",
+            "description": "测试 nginx 是否自动解码 URL - 包括中文、%2F、%25、双重编码等"
         })
 
     async def test_encoding_handler(self, request):
@@ -166,6 +168,46 @@ class PortServer:
             "original_url": str(request.url),
             "timestamp": time.time()
         }
+        return web.json_response(results)
+
+    async def test_double_encoding_handler(self, request):
+        """测试双重编码检测端点 - 检测 %25XX 形式的编码"""
+        path = request.match_info.get("path", "")
+        
+        # 分析接收到的路径
+        results = {
+            "received_path": path,
+            "original_url": str(request.url),
+            "timestamp": time.time(),
+            "analysis": {
+                # 检测 %2520 -> %20 -> space 的双重解码
+                "has_space": " " in path,
+                "has_percent_20": "%20" in path,
+                
+                # 检测 %252F -> %2F -> / 的双重解码  
+                "has_slash": "/" in path,
+                "has_percent_2F": "%2F" in path.upper(),
+                
+                # 检测 %2525 -> %25 -> % 的双重解码
+                "has_percent": "%" in path,
+                "has_percent_25": "%25" in path,
+                
+                # 原始路径分析
+                "path_segments": path.split("/") if path else [],
+                "contains_encoded_chars": "%" in path
+            }
+        }
+        
+        # 判断双重解码情况
+        if results["analysis"]["has_space"] and not results["analysis"]["has_percent_20"]:
+            results["double_decode_detected"] = "space_from_2520"
+        elif results["analysis"]["has_slash"] and not results["analysis"]["has_percent_2F"]:
+            results["double_decode_detected"] = "slash_from_252F"
+        elif results["analysis"]["has_percent"] and not results["analysis"]["has_percent_25"]:
+            results["double_decode_detected"] = "percent_from_2525"
+        else:
+            results["double_decode_detected"] = "none"
+            
         return web.json_response(results)
 
     async def service_worker_handler(self, request):

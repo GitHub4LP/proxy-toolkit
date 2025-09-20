@@ -8,6 +8,7 @@ class PortApp {
         this.needsChineseEncoding = false; // 中文字符是否需要编码
         this.needsSlashEncoding = false; // %2F 是否需要编码
         this.needsPercentEncoding = false; // %25 是否需要编码
+        this.needsDoubleEncoding = false; // 双重编码是否需要处理
         this.setupPortInput();
         this.initServiceWorkerSupport();
         
@@ -49,13 +50,17 @@ class PortApp {
             // 检测 %25 编码
             await this.testPercentEncoding(testInfo.percent_test_path);
             
+            // 检测双重编码
+            await this.testDoubleEncoding(testInfo.double_encoding_test_path);
+            
             // 综合判断
-            this.needsUrlEncoding = this.needsChineseEncoding || this.needsSlashEncoding || this.needsPercentEncoding;
+            this.needsUrlEncoding = this.needsChineseEncoding || this.needsSlashEncoding || this.needsPercentEncoding || this.needsDoubleEncoding;
             
             console.log('[编码检测] 检测完成:');
             console.log('  - 中文字符需要编码:', this.needsChineseEncoding);
             console.log('  - %2F 需要编码:', this.needsSlashEncoding);
             console.log('  - %25 需要编码:', this.needsPercentEncoding);
+            console.log('  - 双重编码需要处理:', this.needsDoubleEncoding);
             console.log('  - 总体需要URL编码:', this.needsUrlEncoding);
             
         } catch (error) {
@@ -65,6 +70,7 @@ class PortApp {
             this.needsChineseEncoding = false;
             this.needsSlashEncoding = false;
             this.needsPercentEncoding = false;
+            this.needsDoubleEncoding = false;
             this.needsUrlEncoding = false; // 异常时默认不启用编码
         }
     }
@@ -164,6 +170,41 @@ class PortApp {
         } catch (error) {
             console.log('[%25编码检测] 请求异常:', error.message);
             this.needsPercentEncoding = false;
+        }
+    }
+
+    async testDoubleEncoding(testPath) {
+        console.log('[双重编码检测] 测试路径:', testPath);
+        console.log('[双重编码检测] 完整URL:', `${this.basePath}${testPath}`);
+        
+        try {
+            const testResponse = await fetch(`${this.basePath}${testPath}`);
+            console.log('[双重编码检测] 响应状态:', testResponse.status);
+            
+            if (testResponse.ok) {
+                const result = await testResponse.json();
+                console.log('[双重编码检测] 响应内容:', result);
+                
+                // 检查是否检测到双重解码
+                if (result.double_decode_detected && result.double_decode_detected !== 'none') {
+                    console.log(`[双重编码检测] 检测到双重解码: ${result.double_decode_detected} - 需要处理`);
+                    this.needsDoubleEncoding = true;
+                } else {
+                    console.log('[双重编码检测] 未检测到双重解码 - 正常');
+                    this.needsDoubleEncoding = false;
+                }
+                
+            } else if (testResponse.status === 400) {
+                console.log('[双重编码检测] 400错误 - 可能存在双重解码问题');
+                this.needsDoubleEncoding = true;
+                
+            } else {
+                console.log('[双重编码检测] 其他错误，状态码:', testResponse.status);
+                this.needsDoubleEncoding = false;
+            }
+        } catch (error) {
+            console.log('[双重编码检测] 请求异常:', error.message);
+            this.needsDoubleEncoding = false;
         }
     }
 
