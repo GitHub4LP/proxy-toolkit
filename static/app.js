@@ -5,9 +5,7 @@ class PortApp {
         this.serviceWorkerStates = new Map(); // 存储每个端口的 Service Worker 状态
         this.addPortTimeout = null; // 防抖定时器
         this.needsUrlEncoding = null; // nginx 编码检测结果
-        this.needsChineseEncoding = false; // 中文字符是否需要编码
         this.nginxDecodeDepth = 0; // nginx 解码深度
-        this.recommendedEncodingLayers = 2; // 推荐编码层数
         this.setupPortInput();
         this.initServiceWorkerSupport();
         
@@ -40,59 +38,24 @@ class PortApp {
             const testInfo = await response.json();
             console.log('[编码检测] 测试配置:', testInfo);
             
-            // 检测中文字符编码
-            await this.testChineseEncoding(testInfo.chinese_test_path);
-            
             // 渐进式编码检测 - 测试1层、2层、3层编码
             if (testInfo.progressive_encoding_tests) {
                 await this.testProgressiveEncoding(testInfo.progressive_encoding_tests);
             }
             
             // 综合判断
-            this.needsUrlEncoding = this.needsChineseEncoding || this.nginxDecodeDepth > 0;
+            this.needsUrlEncoding = this.nginxDecodeDepth > 0;
             
             console.log('[编码检测] 检测完成:');
-            console.log('  - 中文字符需要编码:', this.needsChineseEncoding);
             console.log('  - nginx 解码深度:', this.nginxDecodeDepth);
-            console.log('  - 推荐编码层数:', this.recommendedEncodingLayers);
             console.log('  - 总体需要URL编码:', this.needsUrlEncoding);
             
         } catch (error) {
             console.error('[编码检测] 发生异常:', error);
             console.log('[编码检测] 异常类型:', error.constructor.name);
             console.log('[编码检测] 异常消息:', error.message);
-            this.needsChineseEncoding = false;
             this.nginxDecodeDepth = 0;
-            this.recommendedEncodingLayers = 2;
             this.needsUrlEncoding = false; // 异常时默认不启用编码
-        }
-    }
-
-    async testChineseEncoding(testPath) {
-        console.log('[中文编码检测] 测试路径:', testPath);
-        console.log('[中文编码检测] 完整URL:', `${this.basePath}${testPath}`);
-        
-        try {
-            const testResponse = await fetch(`${this.basePath}${testPath}`);
-            console.log('[中文编码检测] 响应状态:', testResponse.status);
-            
-            if (testResponse.ok) {
-                const result = await testResponse.json();
-                console.log('[中文编码检测] 成功 - nginx 没有自动解码中文');
-                console.log('[中文编码检测] 响应内容:', result);
-                this.needsChineseEncoding = false;
-                
-            } else if (testResponse.status === 400) {
-                console.log('[中文编码检测] 400错误 - nginx 自动解码中文导致错误');
-                this.needsChineseEncoding = true;
-                
-            } else {
-                console.log('[中文编码检测] 其他错误，状态码:', testResponse.status);
-                this.needsChineseEncoding = false;
-            }
-        } catch (error) {
-            console.log('[中文编码检测] 请求异常:', error.message);
-            this.needsChineseEncoding = false;
         }
     }
 
@@ -220,12 +183,10 @@ class PortApp {
         
         // 根据策略调整编码建议
         if (decodeLayers >= 2) {
-            console.log(`[nginx解码策略分析] 建议: nginx会解码${decodeLayers}层，建议使用${decodeLayers + 2}层编码`);
-            this.recommendedEncodingLayers = decodeLayers + 2;
+            console.log(`[nginx解码策略分析] 建议: nginx会解码${decodeLayers}层`);
             this.nginxDecodeDepth = decodeLayers;
         } else if (decodeLayers === 1) {
-            console.log('[nginx解码策略分析] 建议: nginx只解码1层，使用2-3层编码即可');
-            this.recommendedEncodingLayers = 3;
+            console.log('[nginx解码策略分析] 建议: nginx只解码1层');
             this.nginxDecodeDepth = 1;
         } else {
             console.log('[nginx解码策略分析] 建议: nginx不解码或解码行为未知，保持默认策略');
@@ -685,9 +646,9 @@ class PortApp {
             }
             
             // 使用模板 Service Worker，通过 URL 参数传递编码配置
-            const swScriptPath = `${this.basePath}/subpath_service_worker.js?chinese=${this.needsChineseEncoding}&decode_depth=${this.nginxDecodeDepth}&encoding_layers=${this.recommendedEncodingLayers}`;
+            const swScriptPath = `${this.basePath}/subpath_service_worker.js?decode_depth=${this.nginxDecodeDepth}`;
             
-            console.log(`[SW注册] 使用模板 Service Worker，中文编码: ${this.needsChineseEncoding}，解码深度: ${this.nginxDecodeDepth}，编码层数: ${this.recommendedEncodingLayers}`);
+            console.log(`[SW注册] 使用模板 Service Worker，解码深度: ${this.nginxDecodeDepth}`);
             
             // 注册 Service Worker
             const registration = await navigator.serviceWorker.register(

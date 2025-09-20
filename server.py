@@ -62,7 +62,6 @@ class PortServer:
         self.app.router.add_get("/api/ports", self.list_ports_handler)
         self.app.router.add_get("/api/port/{port}", self.port_info_handler)
         self.app.router.add_get("/api/nginx-encoding-test", self.nginx_encoding_test_handler)
-        self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
         self.app.router.add_get("/api/test-progressive-encoding/{path:.*}", self.test_progressive_encoding_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
@@ -110,23 +109,12 @@ class PortServer:
     async def nginx_encoding_test_handler(self, request):
         """检测 nginx 是否会自动解码 URL"""
         return web.json_response({
-            "chinese_test_path": "/api/test-encoding/中文测试",
             "progressive_encoding_tests": {
                 "layer_1": "/api/test-progressive-encoding/1layer%2Fslash",
                 "layer_2": "/api/test-progressive-encoding/2layer%252Fslash", 
                 "layer_3": "/api/test-progressive-encoding/3layer%25252Fslash"
             },
-            "description": "智能检测 nginx 解码行为 - 中文检测 + 渐进式编码检测(1-3层)"
-        })
-
-    async def test_encoding_handler(self, request):
-        """测试编码处理的端点 - 接收中文路径"""
-        path = request.match_info.get("path", "")
-        return web.json_response({
-            "received_path": path,
-            "message": "成功接收到中文测试请求",
-            "original_url": str(request.url),
-            "timestamp": time.time()
+            "description": "智能检测 nginx 解码行为 - 渐进式编码检测(1-3层)"
         })
 
 
@@ -234,14 +222,10 @@ class PortServer:
                 content = f.read()
             
             # 获取核心编码配置参数
-            chinese_encoding = request.query.get('chinese', 'false').lower() == 'true'
             decode_depth = int(request.query.get('decode_depth', '2'))
-            encoding_layers = int(request.query.get('encoding_layers', '4'))
             
             # 替换模板标记
-            content = content.replace('{{NEEDS_CHINESE_ENCODING}}', str(chinese_encoding).lower())
             content = content.replace('{{NGINX_DECODE_DEPTH}}', str(decode_depth))
-            content = content.replace('{{ENCODING_LAYERS}}', str(encoding_layers))
             
             return web.Response(
                 text=content,
