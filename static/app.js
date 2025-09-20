@@ -345,15 +345,15 @@ class PortApp {
         
         let decodingStrategy = '未知';
         let confidence = '低';
+        let decodeLayers = 0;
         
         // 分析1层编码结果
         if (progressiveResults.layer_1) {
             const layer1Strategy = progressiveResults.layer_1.nginx_strategy;
             console.log(`[nginx解码策略分析] 1层编码策略: ${layer1Strategy}`);
             
-            if (layer1Strategy === '单次完全解码') {
-                decodingStrategy = '单次完全解码';
-                confidence = '高';
+            if (layer1Strategy.includes('完全解码为原始字符')) {
+                decodeLayers = Math.max(decodeLayers, 1);
             }
         }
         
@@ -362,18 +362,17 @@ class PortApp {
             const layer2Strategy = progressiveResults.layer_2.nginx_strategy;
             console.log(`[nginx解码策略分析] 2层编码策略: ${layer2Strategy}`);
             
-            if (layer2Strategy === '单次解码一层') {
-                if (decodingStrategy === '单次完全解码') {
-                    // 矛盾：1层完全解码，2层只解码一层
-                    decodingStrategy = '单次解码一层';
-                    confidence = '中';
-                } else {
-                    decodingStrategy = '单次解码一层';
-                    confidence = '高';
-                }
-            } else if (layer2Strategy === '单次完全解码') {
+            if (layer2Strategy.includes('完全解码为原始字符')) {
+                decodeLayers = Math.max(decodeLayers, 2);
                 decodingStrategy = '递归解码';
                 confidence = '高';
+            } else if (layer2Strategy.includes('解码1层为%2F')) {
+                decodeLayers = Math.max(decodeLayers, 1);
+                decodingStrategy = '单次解码一层';
+                confidence = '高';
+            } else if (layer2Strategy.includes('未解码')) {
+                decodingStrategy = '不解码';
+                confidence = '中';
             }
         }
         
@@ -382,22 +381,36 @@ class PortApp {
             const layer3Strategy = progressiveResults.layer_3.nginx_strategy;
             console.log(`[nginx解码策略分析] 3层编码策略: ${layer3Strategy}`);
             
-            if (layer3Strategy === '单次解码一层' && decodingStrategy === '单次解码一层') {
+            if (layer3Strategy.includes('完全解码为原始字符')) {
+                decodeLayers = Math.max(decodeLayers, 3);
+                decodingStrategy = '深度递归解码';
                 confidence = '很高';
+            } else if (layer3Strategy.includes('解码2层为%2F')) {
+                decodeLayers = Math.max(decodeLayers, 2);
+                decodingStrategy = '递归解码';
+                confidence = '很高';
+            } else if (layer3Strategy.includes('解码1层为%252F')) {
+                decodeLayers = Math.max(decodeLayers, 1);
+                if (decodingStrategy === '单次解码一层') {
+                    confidence = '很高';
+                }
             }
         }
         
+        console.log(`[nginx解码策略分析] 检测到解码层数: ${decodeLayers}`);
         console.log(`[nginx解码策略分析] 最终结论: ${decodingStrategy} (置信度: ${confidence})`);
         
         // 根据策略调整编码建议
-        if (decodingStrategy === '单次解码一层') {
-            console.log('[nginx解码策略分析] 建议: 使用2层编码即可绕过nginx解码');
-            this.recommendedEncodingLayers = 2;
-        } else if (decodingStrategy === '递归解码') {
-            console.log('[nginx解码策略分析] 建议: 需要使用更多层编码');
-            this.recommendedEncodingLayers = Math.max(this.nginxDecodeDepth + 2, 3);
+        if (decodeLayers >= 2) {
+            console.log(`[nginx解码策略分析] 建议: nginx会解码${decodeLayers}层，建议使用${decodeLayers + 2}层编码`);
+            this.recommendedEncodingLayers = decodeLayers + 2;
+            this.nginxDecodeDepth = decodeLayers;
+        } else if (decodeLayers === 1) {
+            console.log('[nginx解码策略分析] 建议: nginx只解码1层，使用2-3层编码即可');
+            this.recommendedEncodingLayers = 3;
+            this.nginxDecodeDepth = 1;
         } else {
-            console.log('[nginx解码策略分析] 建议: 保持默认编码策略');
+            console.log('[nginx解码策略分析] 建议: nginx不解码或解码行为未知，保持默认策略');
         }
     }
 

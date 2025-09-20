@@ -484,14 +484,35 @@ class PortServer:
             decode_behavior.append("3层编码保持不变")
             
         # 推断nginx解码策略
-        if analysis["has_slash"] and ("1layer" in path):
-            nginx_strategy = "单次完全解码"
-        elif analysis["has_percent_2F"] and ("2layer" in path):
-            nginx_strategy = "单次解码一层"
-        elif analysis["has_percent_252F"] and ("3layer" in path):
-            nginx_strategy = "单次解码一层"
+        if "1layer" in path:
+            if analysis["has_slash"]:
+                nginx_strategy = "1层编码完全解码为原始字符"
+            elif analysis["has_percent_2F"]:
+                nginx_strategy = "1层编码未解码"
+            else:
+                nginx_strategy = "1层编码结果异常"
+        elif "2layer" in path:
+            if analysis["has_slash"]:
+                nginx_strategy = "2层编码完全解码为原始字符(递归解码)"
+            elif analysis["has_percent_2F"]:
+                nginx_strategy = "2层编码解码1层为%2F"
+            elif analysis["has_percent_252F"]:
+                nginx_strategy = "2层编码未解码"
+            else:
+                nginx_strategy = "2层编码结果异常"
+        elif "3layer" in path:
+            if analysis["has_slash"]:
+                nginx_strategy = "3层编码完全解码为原始字符(递归解码)"
+            elif analysis["has_percent_2F"]:
+                nginx_strategy = "3层编码解码2层为%2F"
+            elif analysis["has_percent_252F"]:
+                nginx_strategy = "3层编码解码1层为%252F"
+            elif analysis["has_percent_25252F"]:
+                nginx_strategy = "3层编码未解码"
+            else:
+                nginx_strategy = "3层编码结果异常"
         else:
-            nginx_strategy = "未知或无解码"
+            nginx_strategy = "未知测试类型"
             
         results["decode_behavior"] = decode_behavior
         results["nginx_strategy"] = nginx_strategy
