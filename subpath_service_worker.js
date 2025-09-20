@@ -5,6 +5,61 @@ const NEEDS_SLASH_ENCODING = {{NEEDS_SLASH_ENCODING}};
 const scope = new URL(self.registration.scope).pathname
 let registeredPaths = new Set([scope]);
 
+// ==================== URL 编码处理函数 ====================
+function hasEncodedChars(str) {
+    // 检测是否包含已编码的字符（%XX 格式）
+    return /%[0-9A-Fa-f]{2}/.test(str);
+}
+
+function hasChineseEncodedChars(str) {
+    // 检测是否包含已编码的中文字符（%E4-%E9 开头的UTF-8编码）
+    return /%[E][4-9A-F]%[0-9A-F]{2}%[0-9A-F]{2}/i.test(str);
+}
+
+function hasSlashEncodedChars(str) {
+    // 检测是否包含已编码的斜杠（%2F）
+    return /%2F/i.test(str);
+}
+
+function selectiveDoubleEncodeUrl(url) {
+    try {
+        const urlObj = new URL(url);
+        const originalPath = urlObj.pathname;
+        const segments = originalPath.split('/');
+        
+        const encodedSegments = segments.map(segment => {
+            let needsEncoding = false;
+            
+            // 根据配置检查是否需要对该段进行编码
+            if (NEEDS_SLASH_ENCODING && hasSlashEncodedChars(segment)) {
+                needsEncoding = true;
+            }
+            
+            if (NEEDS_CHINESE_ENCODING && hasChineseEncodedChars(segment)) {
+                needsEncoding = true;
+            }
+            
+            // 如果需要编码，对整个段进行 encodeURIComponent
+            if (needsEncoding) {
+                return encodeURIComponent(segment);
+            }
+            
+            return segment;
+        });
+        
+        const newPath = encodedSegments.join('/');
+        if (newPath !== originalPath) {
+            urlObj.pathname = newPath;
+            console.log(`[SW] 选择性双重编码: ${originalPath} → ${newPath}`);
+        }
+        
+        return urlObj.toString();
+    } catch (error) {
+        console.error('[SW] 编码处理错误:', error);
+        return url;
+    }
+}
+
 function longestCommonPrefix(str1, str2) {
     if (str1 === str2) {
         return str1;
@@ -19,31 +74,6 @@ function longestCommonPrefix(str1, str2) {
         }
     }
     return prefix.join('');
-}
-
-// URL 编码处理函数
-function encodeUrlForNginx(url) {
-    if (!NEEDS_CHINESE_ENCODING && !NEEDS_SLASH_ENCODING) {
-        return url; // 不需要任何编码
-    }
-    
-    let encoded = url;
-    
-    // 处理中文字符编码
-    if (NEEDS_CHINESE_ENCODING) {
-        // 对中文字符进行双重编码
-        encoded = encoded.replace(/[\u4e00-\u9fff]/g, function(match) {
-            return encodeURIComponent(encodeURIComponent(match));
-        });
-    }
-    
-    // 处理 %2F 编码
-    if (NEEDS_SLASH_ENCODING) {
-        // 将 / 编码为 %252F (双重编码的 %2F)
-        encoded = encoded.replace(/\//g, '%252F');
-    }
-    
-    return encoded;
 }
 
 // ==================== Service Worker 事件处理 ====================
@@ -84,24 +114,23 @@ self.addEventListener('fetch', event => {
                         if (lcp !== matchedPath) {
                             if (event.request.method === 'GET') {
                                 const newUrl = new URL(event.request.url);
-                                let newPathname = requestUrl.pathname.replace(lcp, matchedPath);
+                                newUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
                                 
-                                // 应用编码处理
+                                // 对 URL 进行选择性双重编码处理
                                 if (NEEDS_CHINESE_ENCODING || NEEDS_SLASH_ENCODING) {
-                                    newPathname = encodeUrlForNginx(newPathname);
+                                    const encodedUrl = selectiveDoubleEncodeUrl(newUrl.toString());
+                                    return Response.redirect(encodedUrl, 302);
                                 }
                                 
-                                newUrl.pathname = newPathname;
                                 return Response.redirect(newUrl.href, 302);
                             } else {
-                                let newPathname = requestUrl.pathname.replace(lcp, matchedPath);
+                                requestUrl.pathname = requestUrl.pathname.replace(lcp, matchedPath);
                                 
-                                // 应用编码处理
+                                // 对 URL 进行选择性双重编码处理
                                 if (NEEDS_CHINESE_ENCODING || NEEDS_SLASH_ENCODING) {
-                                    newPathname = encodeUrlForNginx(newPathname);
+                                    requestUrl = new URL(selectiveDoubleEncodeUrl(requestUrl.toString()));
                                 }
                                 
-                                requestUrl.pathname = newPathname;
                                 const modifiedRequest = new Request(requestUrl, {
                                     ...event.request,
                                     method: event.request.method,
