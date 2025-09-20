@@ -107,22 +107,8 @@ self.addEventListener('fetch', event => {
                         console.log(`[SW] 检测到需要编码的字符，进行多层编码处理: ${requestUrl.pathname}`);
                         const encodedUrl = selectiveMultiEncodeUrl(requestUrl.toString());
                         if (encodedUrl !== requestUrl.toString()) {
-                            if (event.request.method === 'GET') {
-                                return Response.redirect(encodedUrl, 302);
-                            } else {
-                                const modifiedRequest = new Request(encodedUrl, {
-                                    ...event.request,
-                                    method: event.request.method,
-                                    headers: event.request.headers,
-                                    body: event.request.body,
-                                    redirect: event.request.redirect,
-                                    referrer: event.request.referrer,
-                                    integrity: event.request.integrity,
-                                    signal: event.request.signal,
-                                    duplex: 'half',
-                                });
-                                return fetch(modifiedRequest);
-                            }
+                            // 更新 requestUrl 用于后续处理
+                            requestUrl = new URL(encodedUrl);
                         }
                     }
                     
