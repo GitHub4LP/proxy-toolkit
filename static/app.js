@@ -33,15 +33,8 @@ class PortApp {
         try {
             console.log('[编码检测] 开始检测 nginx 编码行为...');
             
-            // 获取测试配置
-            const response = await fetch(`${this.basePath}/api/nginx-encoding-test`);
-            const testInfo = await response.json();
-            console.log('[编码检测] 测试配置:', testInfo);
-            
-            // 渐进式编码检测 - 测试1层、2层、3层编码
-            if (testInfo.progressive_encoding_tests) {
-                await this.testProgressiveEncoding(testInfo.progressive_encoding_tests);
-            }
+            // 直接开始渐进式编码检测，无需额外请求
+            await this.testProgressiveEncoding('/api/test-progressive-encoding/', 5);
             
             // 综合判断
             this.needsUrlEncoding = this.nginxDecodeDepth > 0;
@@ -61,38 +54,64 @@ class PortApp {
 
 
 
-    async testProgressiveEncoding(progressiveTests) {
-        console.log('[编码检测] 测试 nginx 解码深度...');
+    async testProgressiveEncoding(basePath, maxLayers) {
+        console.log('[编码检测] 逐步检测 nginx 解码深度...');
         
-        let maxDecodeDepth = 0;
+        let maxDetectedDepth = 0;
+        let layer = 1;
+        let consecutiveZeros = 0;  // 连续检测到0的次数
         
-        // 并行测试所有层级
-        const tests = [
-            { key: 'layer_1', path: progressiveTests.layer_1 },
-            { key: 'layer_2', path: progressiveTests.layer_2 },
-            { key: 'layer_3', path: progressiveTests.layer_3 }
-        ].filter(test => test.path);
-        
-        const results = await Promise.allSettled(
-            tests.map(async test => {
-                const response = await fetch(`${this.basePath}${test.path}`);
-                if (response.ok) {
-                    const result = await response.json();
-                    return { key: test.key, decode_depth: result.decode_depth };
-                }
-                return { key: test.key, decode_depth: 0 };
-            })
-        );
-        
-        // 找到最大解码深度
-        results.forEach(result => {
-            if (result.status === 'fulfilled') {
-                maxDecodeDepth = Math.max(maxDecodeDepth, result.value.decode_depth);
+        // 逐步检测，智能停止条件
+        while (layer <= maxLayers && consecutiveZeros < 2) {
+            console.log(`[编码检测] 测试第${layer}层编码...`);
+            
+            // 前端生成测试路径
+            const testPath = this.generateTestPath(basePath, layer);
+            const depth = await this.testSingleLayer(testPath, layer);
+            
+            if (depth > 0) {
+                maxDetectedDepth = Math.max(maxDetectedDepth, depth);
+                consecutiveZeros = 0;  // 重置计数器
+                console.log(`[编码检测] 第${layer}层检测到解码深度: ${depth}`);
+            } else {
+                consecutiveZeros++;
+                console.log(`[编码检测] 第${layer}层未检测到解码 (连续${consecutiveZeros}次)`);
             }
-        });
+            
+            layer++;
+            
+            // 如果已经检测到很深的解码深度，可以适当提前停止
+            if (maxDetectedDepth >= 3 && consecutiveZeros >= 1) {
+                console.log(`[编码检测] 已检测到足够深度(${maxDetectedDepth})，提前停止`);
+                break;
+            }
+        }
         
-        this.nginxDecodeDepth = maxDecodeDepth;
-        console.log(`[编码检测] nginx 解码深度: ${maxDecodeDepth}`);
+        this.nginxDecodeDepth = maxDetectedDepth;
+        console.log(`[编码检测] 最终检测到的 nginx 解码深度: ${maxDetectedDepth}`);
+    }
+    
+    generateTestPath(basePath, layer) {
+        // 前端生成编码路径：%2F -> %252F -> %25252F
+        let encodedSlash = "%2F";
+        for (let i = 1; i < layer; i++) {
+            encodedSlash = encodedSlash.replace(/%/g, "%25");
+        }
+        
+        return `${basePath}${layer}layer${encodedSlash}slash`;
+    }
+    
+    async testSingleLayer(testPath, layer) {
+        try {
+            const response = await fetch(`${this.basePath}${testPath}`);
+            if (response.ok) {
+                const result = await response.json();
+                return result.decode_depth;
+            }
+        } catch (error) {
+            console.warn(`[编码检测] 第${layer}层测试失败:`, error.message);
+        }
+        return 0;
     }
 
 
