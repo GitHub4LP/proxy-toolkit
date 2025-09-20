@@ -37,33 +37,11 @@ class PortApp {
             const testInfo = await response.json();
             console.log('[编码检测] 测试配置:', testInfo);
             
-            // 直接发送包含中文的请求，观察会发生什么
-            console.log('[编码检测] 发送测试请求到:', testInfo.test_path);
-            console.log('[编码检测] 完整URL:', `${this.basePath}${testInfo.test_path}`);
+            // 检测中文字符编码
+            await this.testChineseEncoding(testInfo.chinese_test_path);
             
-            const testResponse = await fetch(`${this.basePath}${testInfo.test_path}`);
-            
-            console.log('[编码检测] 响应状态:', testResponse.status);
-            console.log('[编码检测] 响应状态文本:', testResponse.statusText);
-            console.log('[编码检测] 响应头:', Object.fromEntries(testResponse.headers.entries()));
-            
-            if (testResponse.ok) {
-                const result = await testResponse.json();
-                console.log('[编码检测] 请求成功 - nginx 没有自动解码');
-                console.log('[编码检测] 响应内容:', result);
-                this.needsUrlEncoding = false; // 请求成功说明不需要编码
-                
-            } else if (testResponse.status === 400) {
-                console.log('[编码检测] 400错误 - nginx 自动解码导致 aiohttp 报错');
-                console.log('[编码检测] 这正是我们要检测的情况！');
-                this.needsUrlEncoding = true; // 400错误说明需要编码
-                
-            } else {
-                console.log('[编码检测] 其他错误，状态码:', testResponse.status);
-                const errorText = await testResponse.text();
-                console.log('[编码检测] 错误内容:', errorText);
-                this.needsUrlEncoding = false; // 其他错误默认不启用编码
-            }
+            // 检测 %2F 编码
+            await this.testSlashEncoding(testInfo.slash_test_path);
             
             console.log(`[编码检测] 最终结果: ${this.needsUrlEncoding ? '需要' : '不需要'}URL编码`);
             
@@ -71,8 +49,65 @@ class PortApp {
             console.error('[编码检测] 发生异常:', error);
             console.log('[编码检测] 异常类型:', error.constructor.name);
             console.log('[编码检测] 异常消息:', error.message);
-            console.log('[编码检测] 异常堆栈:', error.stack);
             this.needsUrlEncoding = false; // 异常时默认不启用编码
+        }
+    }
+
+    async testChineseEncoding(testPath) {
+        console.log('[中文编码检测] 测试路径:', testPath);
+        console.log('[中文编码检测] 完整URL:', `${this.basePath}${testPath}`);
+        
+        try {
+            const testResponse = await fetch(`${this.basePath}${testPath}`);
+            console.log('[中文编码检测] 响应状态:', testResponse.status);
+            
+            if (testResponse.ok) {
+                const result = await testResponse.json();
+                console.log('[中文编码检测] 成功 - nginx 没有自动解码中文');
+                console.log('[中文编码检测] 响应内容:', result);
+                
+            } else if (testResponse.status === 400) {
+                console.log('[中文编码检测] 400错误 - nginx 自动解码中文导致错误');
+                this.needsUrlEncoding = true;
+                
+            } else {
+                console.log('[中文编码检测] 其他错误，状态码:', testResponse.status);
+            }
+        } catch (error) {
+            console.log('[中文编码检测] 请求异常:', error.message);
+            // 可能是网络错误，不影响最终判断
+        }
+    }
+
+    async testSlashEncoding(testPath) {
+        console.log('[%2F编码检测] 测试路径:', testPath);
+        console.log('[%2F编码检测] 完整URL:', `${this.basePath}${testPath}`);
+        
+        try {
+            const testResponse = await fetch(`${this.basePath}${testPath}`);
+            console.log('[%2F编码检测] 响应状态:', testResponse.status);
+            
+            if (testResponse.ok) {
+                const result = await testResponse.json();
+                console.log('[%2F编码检测] 响应内容:', result);
+                
+                // 检查 %2F 是否被自动解码为 /
+                if (result.contains_slash) {
+                    console.log('[%2F编码检测] %2F 被自动解码为 / - 需要编码处理');
+                    this.needsUrlEncoding = true;
+                } else {
+                    console.log('[%2F编码检测] %2F 保持编码状态 - 正常');
+                }
+                
+            } else if (testResponse.status === 400) {
+                console.log('[%2F编码检测] 400错误 - 可能是路径解析问题');
+                this.needsUrlEncoding = true;
+                
+            } else {
+                console.log('[%2F编码检测] 其他错误，状态码:', testResponse.status);
+            }
+        } catch (error) {
+            console.log('[%2F编码检测] 请求异常:', error.message);
         }
     }
 

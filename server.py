@@ -63,6 +63,7 @@ class PortServer:
         self.app.router.add_get("/api/port/{port}", self.port_info_handler)
         self.app.router.add_get("/api/nginx-encoding-test", self.nginx_encoding_test_handler)
         self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
+        self.app.router.add_get("/api/test-slash-encoding/{path:.*}", self.test_slash_encoding_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
         self.app.router.add_get("/subpath_service_worker_enhanced.js", self.enhanced_service_worker_handler)
@@ -109,11 +110,10 @@ class PortServer:
 
     async def nginx_encoding_test_handler(self, request):
         """检测 nginx 是否会自动解码 URL"""
-        # 直接使用中文路径进行测试
-        test_path = "/api/test-encoding/中文测试"
         return web.json_response({
-            "test_path": test_path,
-            "description": "测试 nginx 是否自动解码 URL - 直接发送中文路径"
+            "chinese_test_path": "/api/test-encoding/中文测试",
+            "slash_test_path": "/api/test-slash-encoding/test%2Fpath",
+            "description": "测试 nginx 是否自动解码 URL - 包括中文和%2F"
         })
 
     async def test_encoding_handler(self, request):
@@ -121,9 +121,21 @@ class PortServer:
         path = request.match_info.get("path", "")
         return web.json_response({
             "received_path": path,
-            "message": "成功接收到请求",
+            "message": "成功接收到中文测试请求",
             "original_url": str(request.url),
             "timestamp": time.time()
+        })
+
+    async def test_slash_encoding_handler(self, request):
+        """测试 %2F 编码处理的端点"""
+        path = request.match_info.get("path", "")
+        return web.json_response({
+            "received_path": path,
+            "message": "成功接收到%2F测试请求",
+            "original_url": str(request.url),
+            "timestamp": time.time(),
+            "contains_slash": "/" in path,
+            "expected_encoded": "test%2Fpath"
         })
 
     async def service_worker_handler(self, request):
