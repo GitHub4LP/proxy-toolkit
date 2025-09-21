@@ -1,0 +1,4 @@
+aiohttp
+jupyter-server
+psutil
+requests
