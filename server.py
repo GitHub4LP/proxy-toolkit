@@ -61,7 +61,7 @@ class PortServer:
         self.app.router.add_get("/", self.index_handler)
         self.app.router.add_get("/api/ports", self.list_ports_handler)
         self.app.router.add_get("/api/port/{port}", self.port_info_handler)
-        self.app.router.add_get("/api/test-progressive-encoding/{path:.*}", self.test_progressive_encoding_handler)
+        self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
 
@@ -106,36 +106,10 @@ class PortServer:
         return web.json_response(port_info.to_dict())
 
 
-    async def test_progressive_encoding_handler(self, request):
-        """渐进式编码测试端点"""
+    async def test_encoding_handler(self, request):
+        """nginx解码深度检测端点 - 返回nginx解码后的路径"""
         path = request.match_info.get("path", "")
-        
-        # 动态检测解码层数
-        decode_depth = 0
-        
-        # 从路径中提取层数信息
-        import re
-        layer_match = re.search(r'(\d+)layer', path)
-        if layer_match:
-            current_layer = int(layer_match.group(1))
-            
-            if "/" in path:  # 完全解码到原始字符
-                decode_depth = current_layer
-            else:
-                # 计算剩余的编码层数来推断解码深度
-                if "%25252F" in path.upper():  # 3层编码剩余
-                    decode_depth = max(0, current_layer - 3)
-                elif "%252F" in path.upper():  # 2层编码剩余
-                    decode_depth = max(0, current_layer - 2)
-                elif "%2F" in path.upper():  # 1层编码剩余
-                    decode_depth = max(0, current_layer - 1)
-                # 如果没有任何编码字符，说明没有解码，decode_depth保持0
-                
-        return web.json_response({
-            "path": path,
-            "decode_depth": decode_depth,
-            "layer": layer_match.group(1) if layer_match else "unknown"
-        })
+        return web.json_response({"path": path})
 
     async def service_worker_handler(self, request):
         """提供 Service Worker 脚本 - 支持模板替换"""
