@@ -74,7 +74,7 @@ class AIStudioConfigManager:
     """AI Studio配置管理器"""
 
     def __init__(self):
-        self.config_file: str = "/home/aistudio/.gradio/config.json"
+        self.config_file: str = "~/.webide/proxy_config.json"
 
     def update_config(self, port: int) -> None:
         """更新AI Studio配置"""
@@ -82,10 +82,12 @@ class AIStudioConfigManager:
             return
 
         try:
+            # 展开用户目录路径
+            config_file = os.path.expanduser(self.config_file)
             config: dict[str, dict[str, int]] = {"gradio": {str(port): port}}
 
-            if os.path.exists(self.config_file):
-                with open(self.config_file, "r") as f:
+            if os.path.exists(config_file):
+                with open(config_file, "r") as f:
                     existing_config = cast(dict[str, dict[str, int]], json.load(f))
                     if "gradio" in existing_config:
                         existing_config["gradio"][str(port)] = port
@@ -94,8 +96,8 @@ class AIStudioConfigManager:
                         config = existing_config
                         config["gradio"] = {str(port): port}
 
-            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
-            with open(self.config_file, "w") as f:
+            os.makedirs(os.path.dirname(config_file), exist_ok=True)
+            with open(config_file, "w") as f:
                 json.dump(config, f, indent=4)
 
         except Exception as e:
