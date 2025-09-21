@@ -11,12 +11,9 @@ import sys
 
 def install_dependencies():
     """自动安装依赖包"""
-    requirements_file = "requirements.txt"
-    
-    # 检查依赖文件是否存在
-    if not os.path.exists(requirements_file):
-        print(f"[错误] 依赖文件 {requirements_file} 不存在")
-        sys.exit(1)
+    # 获取脚本所在目录
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    requirements_file = os.path.join(script_dir, "requirements.txt")
     
     # 检查关键依赖是否已安装
     try:
@@ -29,10 +26,21 @@ def install_dependencies():
     except ImportError:
         pass
     
-    # 安装依赖
-    print(f"[安装] 正在安装依赖文件: {requirements_file}")
+    # 如果依赖文件存在，使用文件安装
+    if os.path.exists(requirements_file):
+        print(f"[安装] 正在安装依赖文件: {requirements_file}")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", requirements_file])
+            print("[完成] 依赖安装成功")
+            return
+        except subprocess.CalledProcessError as e:
+            print(f"[警告] 依赖文件安装失败: {e}")
+    
+    # 回退到直接安装依赖包
+    dependencies = ["aiohttp", "jupyter-server", "psutil", "requests"]
+    print("[安装] 正在安装核心依赖包")
     try:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", requirements_file])
+        subprocess.check_call([sys.executable, "-m", "pip", "install"] + dependencies)
         print("[完成] 依赖安装成功")
     except subprocess.CalledProcessError as e:
         print(f"[错误] 依赖安装失败: {e}")
