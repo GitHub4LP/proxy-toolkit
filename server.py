@@ -207,7 +207,16 @@ class PortServer:
         site = web.TCPSite(runner, self.host, self.port)
         await site.start()
 
-        print(f"[启动] 服务已启动: http://{self.host}:{self.port}")
+        # 生成本服务的访问URL
+        local_url = f"http://{self.host}:{self.port}"
+        proxy_url = generate_proxy_url(self.port)
+        
+        if proxy_url:
+            print(f"[启动] 服务已启动，请访问: {proxy_url}")
+            print(f"[本地] 本地地址: {local_url}")
+        else:
+            print(f"[启动] 服务已启动: {local_url}")
+        
         return runner
 
     async def stop_server(self, runner):
