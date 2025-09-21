@@ -64,30 +64,38 @@
 
 #### nginx解码深度检测
 ```javascript
-// 前端发送5层编码的测试路径
-generateTestPath(basePath, layer) {
-    let encodedSlash = "%2F";
-    for (let i = 1; i < layer; i++) {
-        encodedSlash = encodedSlash.replace(/%/g, "%25");
-    }
-    return `${basePath}test${encodedSlash}path`;
-}
-
-// 通过逐步解码匹配来判断nginx解码了多少层
-calculateDecodeDepth(path) {
-    const originalEncoded = "test%252525252Fpath"; // 5层编码
-    let currentPath = originalEncoded;
-    let decodeSteps = 0;
+// 自动检测nginx URL解码深度
+async detectNginxEncoding() {
+    const testSegment = "test/path";  // 原始测试路径段
+    const maxLayers = 5;  // 最大检测层数
     
-    for (let i = 0; i < 5; i++) {
-        if (currentPath === path) {
-            return decodeSteps;
-        }
-        currentPath = decodeURIComponent(currentPath);
-        decodeSteps++;
+    // 生成多层编码的测试路径
+    let encodedSegment = testSegment;
+    for (let i = 0; i < maxLayers; i++) {
+        encodedSegment = encodeURIComponent(encodedSegment);
     }
     
-    return decodeSteps;
+    // 发送检测请求
+    const response = await fetch(`/api/test-encoding/${encodedSegment}`);
+    const result = await response.json();
+    
+    // 计算nginx解码深度：从收到的路径开始解码，看需要多少步回到原始字符串
+    let current = result.path;
+    let steps = 0;
+    
+    if (current === testSegment) {
+        return maxLayers; // nginx解码了所有层
+    }
+    
+    while (current !== testSegment && steps < maxLayers) {
+        const decoded = decodeURIComponent(current);
+        if (decoded === current) break; // 无法继续解码
+        current = decoded;
+        steps++;
+    }
+    
+    // nginx解码深度 = 发送的总层数 - 还需要解码的步数
+    return (current === testSegment) ? maxLayers - steps : 0;
 }
 ```
 
