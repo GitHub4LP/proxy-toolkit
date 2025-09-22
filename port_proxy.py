@@ -46,6 +46,7 @@ def check_jupyter_proxy() -> str:
         def do_GET(self):
             self.send_response(200)
             self.end_headers()
+        def log_message(self, format, *args): pass
     
     test_server = HTTPServer(('127.0.0.1', test_port), TestHandler)
     threading.Thread(target=test_server.serve_forever, daemon=True).start()
