@@ -30,17 +30,39 @@ def check_jupyter_proxy() -> str:
         return ""
 
     proxy_template = r"proxy/{{port}}/"
-    port = 65534
-    proxy_str = proxy_template.replace("{{port}}", str(port))
-    for server in servers:  # pyright: ignore[reportAny]
-        server_base_url: str = server["base_url"]  # pyright: ignore[reportAny]
-        local_url = f"http://127.0.0.1:{server['port']}{server_base_url}{proxy_str}?token={server['token']}"
-        try:
-            resp = requests.get(local_url, timeout=5)
-            if 500 <= resp.status_code < 600:
-                return server_base_url + proxy_template
-        except requests.exceptions.RequestException:
-            continue
+    
+    # 启动临时测试服务
+    import socket
+    import threading
+    from http.server import HTTPServer, BaseHTTPRequestHandler
+    
+    # 找个可用端口
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('127.0.0.1', 0))
+        test_port = s.getsockname()[1]
+    
+    # 最简单的测试服务
+    class TestHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+    
+    test_server = HTTPServer(('127.0.0.1', test_port), TestHandler)
+    threading.Thread(target=test_server.serve_forever, daemon=True).start()
+    
+    try:
+        proxy_str = proxy_template.replace("{{port}}", str(test_port))
+        for server in servers:  # pyright: ignore[reportAny]
+            server_base_url: str = server["base_url"]  # pyright: ignore[reportAny]
+            proxy_url = f"http://127.0.0.1:{server['port']}{server_base_url}{proxy_str}?token={server['token']}"
+            try:
+                resp = requests.get(proxy_url, timeout=2)
+                if resp.status_code == 200:
+                    return server_base_url + proxy_template
+            except requests.exceptions.RequestException:
+                continue
+    finally:
+        test_server.shutdown()
 
     return ""
 
