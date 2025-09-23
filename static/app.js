@@ -31,56 +31,89 @@ class PortApp {
     async detectNginxEncoding() {
         try {
             const testSegment = "test/path";  // 原始测试路径段
-            const maxLayers = 5;  // 最大检测层数
+            let maxLayers = 4;  // 初始最大检测层数
+            const maxAttempts = 8;  // 最大尝试层数上限
             
-            // 生成多层编码的测试路径
-            let encodedSegment = testSegment;
-            for (let i = 0; i < maxLayers; i++) {
-                encodedSegment = encodeURIComponent(encodedSegment);
-            }
+            // 基准状态：编码一次后的状态（浏览器发送URL的标准状态）
+            const baseEncoded = encodeURIComponent(testSegment);  // "test%2Fpath"
             
-            // 发送检测请求
-            const response = await fetch(`${this.basePath}/api/test-encoding/${encodedSegment}`);
-            
-            if (response.ok) {
+            while (maxLayers <= maxAttempts) {
+                // 在基准状态基础上进行额外编码
+                let encodedSegment = baseEncoded;
+                for (let i = 0; i < maxLayers; i++) {
+                    encodedSegment = encodeURIComponent(encodedSegment);
+                }
+                
+                // 发送检测请求
+                const response = await fetch(`${this.basePath}/api/test-encoding/${encodedSegment}`);
+                
+                if (!response.ok) {
+                    this.nginxDecodeDepth = 0;
+                    break;
+                }
+                
                 const result = await response.json();
                 
-                // 计算nginx解码深度：从收到的路径开始解码，看需要多少步回到原始字符串
+                // 计算nginx解码深度：将result.path重新编码，看需要编码多少次能回到原始发送的encodedSegment
                 let current = result.path;
-                let steps = 0;
+                let encodeSteps = 0;
                 
-                // 如果已经是原始字符串，说明nginx解码了所有层
-                if (current === testSegment) {
-                    this.nginxDecodeDepth = maxLayers;
-                } else {
-                    // 逐步解码，计算还需要多少步回到原始状态
-                    while (current !== testSegment && steps < maxLayers) {
-                        try {
-                            const decoded = decodeURIComponent(current);
-                            // 如果解码后没有变化，说明无法继续解码
-                            if (decoded === current) {
-                                break;
-                            }
-                            current = decoded;
-                            steps++;
-                        } catch (error) {
-                            // 解码失败，停止
-                            break;
-                        }
-                    }
-                    
-                    // nginx解码深度 = 发送的总层数 - 还需要解码的步数
-                    this.nginxDecodeDepth = (current === testSegment) ? maxLayers - steps : 0;
+                // 逐步编码，直到匹配原始发送的encodedSegment或达到最大层数
+                while (current !== encodedSegment && encodeSteps < maxLayers) {
+                    current = encodeURIComponent(current);
+                    encodeSteps++;
                 }
-            } else {
-                this.nginxDecodeDepth = 0;
+                
+                // 如果能编码回到原始发送的encodedSegment，那么nginx解码深度就是encodeSteps
+                const detectedDepth = (current === encodedSegment) ? encodeSteps : 0;
+                
+                // 验证检测结果
+                if (detectedDepth > 0) {
+                    const verified = await this.verifyNginxDecodeDepth(baseEncoded, detectedDepth);
+                    if (verified) {
+                        this.nginxDecodeDepth = detectedDepth;
+                        console.log(`[编码检测] NGINX_DECODE_DEPTH: ${this.nginxDecodeDepth} (验证通过)`);
+                        return;
+                    } else {
+                        console.warn(`[编码验证] 层数${maxLayers}检测失败，增加检测层数重试`);
+                    }
+                } else {
+                    console.warn(`[编码检测] 层数${maxLayers}未检测到解码，增加检测层数重试`);
+                }
+                
+                // 增加检测层数重试
+                maxLayers++;
             }
             
-            console.log(`[编码检测] NGINX_DECODE_DEPTH: ${this.nginxDecodeDepth}`);
+            // 所有尝试都失败，设置为0
+            this.nginxDecodeDepth = 0;
+            console.warn(`[编码检测] 达到最大尝试次数${maxAttempts}，放弃检测，设置为0`);
             
         } catch (error) {
             console.error('[编码检测] 发生异常:', error);
             this.nginxDecodeDepth = 0;
+        }
+    }
+
+    async verifyNginxDecodeDepth(baseEncoded, detectedDepth) {
+        try {
+            // 用检测到的解码深度进行反向验证
+            let verifySegment = baseEncoded;
+            for (let i = 0; i < detectedDepth; i++) {
+                verifySegment = encodeURIComponent(verifySegment);
+            }
+            
+            // 发送验证请求
+            const verifyResponse = await fetch(`${this.basePath}/api/test-encoding/${verifySegment}`);
+            if (verifyResponse.ok) {
+                const verifyResult = await verifyResponse.json();
+                // 验证nginx是否确实解码到了基准状态
+                return verifyResult.path === baseEncoded;
+            }
+            return false;
+        } catch (error) {
+            console.error('[编码验证] 验证过程异常:', error);
+            return false;
         }
     }
 
