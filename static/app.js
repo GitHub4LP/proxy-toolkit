@@ -68,17 +68,13 @@ class PortApp {
                 const detectedDepth = (current === encodedSegment) ? encodeSteps : 0;
                 
                 // 验证检测结果
-                if (detectedDepth > 0) {
-                    const verified = await this.verifyNginxDecodeDepth(baseEncoded, detectedDepth);
-                    if (verified) {
-                        this.nginxDecodeDepth = detectedDepth;
-                        console.log(`[编码检测] NGINX_DECODE_DEPTH: ${this.nginxDecodeDepth} (验证通过)`);
-                        return;
-                    } else {
-                        console.warn(`[编码验证] 层数${maxLayers}检测失败，增加检测层数重试`);
-                    }
+                const verified = await this.verifyNginxDecodeDepth(baseEncoded, detectedDepth);
+                if (verified) {
+                    this.nginxDecodeDepth = detectedDepth;
+                    console.log(`[编码检测] NGINX_DECODE_DEPTH: ${this.nginxDecodeDepth} (验证通过)`);
+                    return;
                 } else {
-                    console.warn(`[编码检测] 层数${maxLayers}未检测到解码，增加检测层数重试`);
+                    console.warn(`[编码验证] 层数${maxLayers}检测失败，增加检测层数重试`);
                 }
                 
                 // 增加检测层数重试
