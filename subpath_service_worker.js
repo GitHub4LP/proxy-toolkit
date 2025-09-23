@@ -108,14 +108,7 @@ self.addEventListener('fetch', event => {
                 // 移除处理标记并转发请求
                 const cleanUrl = removeProcessingMark(event.request.url);
                 const cleanRequest = new Request(cleanUrl, {
-                    method: event.request.method,
-                    headers: event.request.headers,
-                    body: event.request.body,
-                    mode: event.request.mode,
-                    credentials: event.request.credentials,
-                    cache: event.request.cache,
-                    redirect: event.request.redirect,
-                    referrer: event.request.referrer,
+                    ...event.request,
                     duplex: event.request.body ? 'half' : undefined
                 });
                 return fetch(cleanRequest);
@@ -139,30 +132,13 @@ self.addEventListener('fetch', event => {
                     finalPathname = finalPathname.replace(lcp, scope);
                 }
                 
-                // 3. 如果 pathname 有变化，创建新请求
+                // 3. 如果 pathname 有变化，使用307重定向统一处理
                 if (finalPathname !== requestUrl.pathname) {
-                    if (event.request.method === 'GET') {
-                        const newUrl = new URL(event.request.url);
-                        newUrl.pathname = finalPathname;
-                        // 添加处理标记，防止重定向循环
-                        const markedUrl = addProcessingMark(newUrl.href);
-                        return Response.redirect(markedUrl, 302);
-                    } else {
-                        const finalUrl = new URL(requestUrl);
-                        finalUrl.pathname = finalPathname;
-                        const modifiedRequest = new Request(finalUrl, {
-                            ...event.request,
-                            method: event.request.method,
-                            headers: event.request.headers,
-                            body: event.request.body,
-                            redirect: event.request.redirect,
-                            referrer: event.request.referrer,
-                            integrity: event.request.integrity,
-                            signal: event.request.signal,
-                            duplex: 'half',
-                        });
-                        return fetch(modifiedRequest);
-                    }
+                    const newUrl = new URL(event.request.url);
+                    newUrl.pathname = finalPathname;
+                    // 添加处理标记，防止重定向循环
+                    const markedUrl = addProcessingMark(newUrl.href);
+                    return Response.redirect(markedUrl, 307);
                 }
             } else {
                 event.request.headers["cross-origin-resource-policy"] = "cross-origin";
