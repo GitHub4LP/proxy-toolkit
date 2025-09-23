@@ -1,8 +1,7 @@
 // 编码配置 - 由后端模板替换
 const NGINX_DECODE_DEPTH = {{NGINX_DECODE_DEPTH}};
 
-const scope = new URL(self.registration.scope).pathname
-let registeredPaths = new Set([scope]);
+const scope = new URL(self.registration.scope).pathname;
 
 // ==================== URL 编码处理函数 ====================
 function hasEncodedChars(str) {
@@ -86,8 +85,6 @@ function longestCommonPrefix(str1, str2) {
 
 // ==================== Service Worker 事件处理 ====================
 self.addEventListener('install', (event) => {
-    // console.log('[SW] registeredPaths:', Array.from(registeredPaths));
-    
     event.waitUntil(
         (async () => {
             return self.skipWaiting();
@@ -126,57 +123,45 @@ self.addEventListener('fetch', event => {
 
             let requestUrl = new URL(event.request.url);
             if (requestUrl.host === self.location.host) {
-                if (event.request.referrer) {
-                    const referrer = event.request.referrer;
-                    let matchedPath = null;
-                    for (const path of registeredPaths) {
-                        if (referrer && referrer.includes(path)) {
-                            matchedPath = path;
-                            break;
-                        }
+                let finalPathname = requestUrl.pathname;
+                
+                // 1. 编码处理
+                if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname)) {
+                    const encodedUrl = selectiveMultiEncodeUrl(requestUrl.toString());
+                    if (encodedUrl !== requestUrl.toString()) {
+                        finalPathname = new URL(encodedUrl).pathname;
                     }
-                    if (matchedPath) {
-                        let finalPathname = requestUrl.pathname;
-                        
-                        // 1. 编码处理
-                        if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname)) {
-                            const encodedUrl = selectiveMultiEncodeUrl(requestUrl.toString());
-                            if (encodedUrl !== requestUrl.toString()) {
-                                finalPathname = new URL(encodedUrl).pathname;
-                            }
-                        }
-                        
-                        // 2. 路径匹配处理
-                        const lcp = longestCommonPrefix(matchedPath, finalPathname);
-                        if (lcp !== matchedPath) {
-                            finalPathname = finalPathname.replace(lcp, matchedPath);
-                        }
-                        
-                        // 3. 如果 pathname 有变化，创建新请求
-                        if (finalPathname !== requestUrl.pathname) {
-                            if (event.request.method === 'GET') {
-                                const newUrl = new URL(event.request.url);
-                                newUrl.pathname = finalPathname;
-                                // 添加处理标记，防止重定向循环
-                                const markedUrl = addProcessingMark(newUrl.href);
-                                return Response.redirect(markedUrl, 302);
-                            } else {
-                                const finalUrl = new URL(requestUrl);
-                                finalUrl.pathname = finalPathname;
-                                const modifiedRequest = new Request(finalUrl, {
-                                    ...event.request,
-                                    method: event.request.method,
-                                    headers: event.request.headers,
-                                    body: event.request.body,
-                                    redirect: event.request.redirect,
-                                    referrer: event.request.referrer,
-                                    integrity: event.request.integrity,
-                                    signal: event.request.signal,
-                                    duplex: 'half',
-                                });
-                                return fetch(modifiedRequest);
-                            }
-                        }
+                }
+                
+                // 2. 路径匹配处理
+                const lcp = longestCommonPrefix(scope, finalPathname);
+                if (lcp !== scope) {
+                    finalPathname = finalPathname.replace(lcp, scope);
+                }
+                
+                // 3. 如果 pathname 有变化，创建新请求
+                if (finalPathname !== requestUrl.pathname) {
+                    if (event.request.method === 'GET') {
+                        const newUrl = new URL(event.request.url);
+                        newUrl.pathname = finalPathname;
+                        // 添加处理标记，防止重定向循环
+                        const markedUrl = addProcessingMark(newUrl.href);
+                        return Response.redirect(markedUrl, 302);
+                    } else {
+                        const finalUrl = new URL(requestUrl);
+                        finalUrl.pathname = finalPathname;
+                        const modifiedRequest = new Request(finalUrl, {
+                            ...event.request,
+                            method: event.request.method,
+                            headers: event.request.headers,
+                            body: event.request.body,
+                            redirect: event.request.redirect,
+                            referrer: event.request.referrer,
+                            integrity: event.request.integrity,
+                            signal: event.request.signal,
+                            duplex: 'half',
+                        });
+                        return fetch(modifiedRequest);
                     }
                 }
             } else {
