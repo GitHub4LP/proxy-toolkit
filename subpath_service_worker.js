@@ -1,6 +1,9 @@
 // 编码配置 - 由后端模板替换
 const NGINX_DECODE_DEPTH = {{NGINX_DECODE_DEPTH}};
 
+// 防循环策略选择: 'url_param' 或 'memory_set'
+const LOOP_STRATEGY = 'url_param';
+
 const scope = new URL(self.registration.scope).pathname;
 
 // ==================== URL 编码处理函数 ====================
@@ -9,27 +12,52 @@ function hasEncodedChars(str) {
     return /%[0-9A-Fa-f]{2}/.test(str);
 }
 
-function isProcessedByServiceWorker(url) {
-    // 检测URL是否包含我们的处理标记
-    return new URL(url).searchParams.has('_sw_processed');
-}
-
-function addProcessingMark(url) {
-    // 添加处理标记
-    const urlObj = new URL(url);
-    urlObj.searchParams.set('_sw_processed', '1');
-    return urlObj.toString();
-}
-
-function removeProcessingMark(url) {
-    // 移除处理标记，保持URL干净
-    const urlObj = new URL(url);
-    urlObj.searchParams.delete('_sw_processed');
+// 两种防循环方案，接口完全一致
+const LoopStrategies = {
+    url_param: {
+        isProcessed(url) {
+            return new URL(url).searchParams.has('_sw');
+        },
+        
+        addMark(url) {
+            const urlObj = new URL(url);
+            urlObj.searchParams.set('_sw', '');
+            return urlObj.toString();
+        },
+        
+        removeMark(request) {
+            const urlObj = new URL(request.url);
+            urlObj.searchParams.delete('_sw');
+            const cleanUrl = urlObj.toString();
+            const finalUrl = cleanUrl.endsWith('?') ? cleanUrl.slice(0, -1) : cleanUrl;
+            return new Request(finalUrl, {
+                ...request,
+                duplex: request.body ? 'half' : undefined
+            });
+        }
+    },
     
-    // 如果没有其他参数，移除问号
-    const cleanUrl = urlObj.toString();
-    return cleanUrl.endsWith('?') ? cleanUrl.slice(0, -1) : cleanUrl;
-}
+    memory_set: {
+        _cache: new Set(),
+        
+        isProcessed(url) {
+            return this._cache.has(url);
+        },
+        
+        addMark(url) {
+            this._cache.add(url);
+            return url;
+        },
+        
+        removeMark(request) {
+            this._cache.delete(request.url);
+            return request;
+        }
+    }
+};
+
+// 当前使用的策略
+const strategy = LoopStrategies[LOOP_STRATEGY];
 
 function multiLayerEncodeSegment(segment, layers) {
     // 多层编码函数
@@ -40,11 +68,9 @@ function multiLayerEncodeSegment(segment, layers) {
     return encoded;
 }
 
-function selectiveMultiEncodeUrl(url) {
+function selectiveMultiEncodePath(pathname) {
     try {
-        const urlObj = new URL(url);
-        const originalPath = urlObj.pathname;
-        const segments = originalPath.split('/');
+        const segments = pathname.split('/');
         
         const encodedSegments = segments.map(segment => {
             // 如果 nginx 有解码深度且段包含已编码字符，进行多层编码
@@ -54,16 +80,10 @@ function selectiveMultiEncodeUrl(url) {
             return segment;
         });
         
-        const newPath = encodedSegments.join('/');
-        if (newPath !== originalPath) {
-            urlObj.pathname = newPath;
-            // console.log(`[SW] 多层编码处理: ${originalPath} → ${newPath}`);
-        }
-        
-        return urlObj.toString();
+        return encodedSegments.join('/');
     } catch (error) {
         // console.error('[SW] 编码处理错误:', error);
-        return url;
+        return pathname;
     }
 }
 
@@ -111,13 +131,9 @@ self.addEventListener('fetch', event => {
             }
 
             // 检查是否已被我们处理过，防止重定向循环
-            if (isProcessedByServiceWorker(event.request.url)) {
+            if (strategy.isProcessed(event.request.url)) {
                 // 移除处理标记并转发请求
-                const cleanUrl = removeProcessingMark(event.request.url);
-                const cleanRequest = new Request(cleanUrl, {
-                    ...event.request,
-                    duplex: event.request.body ? 'half' : undefined
-                });
+                const cleanRequest = strategy.removeMark(event.request);
                 return fetch(cleanRequest);
             }
 
@@ -126,10 +142,7 @@ self.addEventListener('fetch', event => {
             
             // 1. 编码处理
             if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname)) {
-                const encodedUrl = selectiveMultiEncodeUrl(requestUrl.toString());
-                if (encodedUrl !== requestUrl.toString()) {
-                    finalPathname = new URL(encodedUrl).pathname;
-                }
+                finalPathname = selectiveMultiEncodePath(finalPathname);
             }
             
             // 2. 路径匹配处理
@@ -142,7 +155,7 @@ self.addEventListener('fetch', event => {
             if (finalPathname !== requestUrl.pathname) {
                 requestUrl.pathname = finalPathname;
                 // 添加处理标记，防止重定向循环
-                const markedUrl = addProcessingMark(requestUrl.href);
+                const markedUrl = strategy.addMark(requestUrl.href);
                 return Response.redirect(markedUrl, 307);
             }
             
