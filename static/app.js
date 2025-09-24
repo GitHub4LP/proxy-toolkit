@@ -3,6 +3,7 @@ class PortApp {
     constructor() {
         this.basePath = window.location.pathname.replace(/\/$/, '');
         this.serviceWorkerStates = new Map(); // 存储每个端口的 Service Worker 状态
+        this.portDecodeDepths = new Map(); // 存储每个端口的解码深度设置
         this.addPortTimeout = null; // 防抖定时器
         this.nginxDecodeDepth = 0; // nginx 解码深度
         this.setupPortInput();
@@ -351,7 +352,7 @@ class PortApp {
             
             this.displayPorts(ports);
         } catch (error) {
-            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="5" class="error">获取端口列表失败</td></tr>';
+            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="6" class="error">获取端口列表失败</td></tr>';
         }
     }
 
@@ -393,7 +394,7 @@ class PortApp {
         const allPortsArray = Array.from(allPorts.values()).sort((a, b) => a.port - b.port);
         
         if (allPortsArray.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="no-ports">暂无端口数据</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="no-ports">暂无端口数据</td></tr>';
             return;
         }
 
@@ -417,6 +418,17 @@ class PortApp {
                 `<a href="${this.getAbsoluteUrl(port.proxy_url)}" target="_blank" class="url-link">${port.proxy_url}</a>` : 
                 'N/A';
             
+            // 解码深度输入框 - 新端口自动填入全局检测值
+            if (!this.portDecodeDepths.has(port.port)) {
+                this.portDecodeDepths.set(port.port, this.nginxDecodeDepth);
+            }
+            const currentDecodeDepth = this.portDecodeDepths.get(port.port);
+            const decodeDepthInput = this.swSupported && this.isSubpath && port.proxy_url ? 
+                `<input type="number" class="decode-depth-input" value="${currentDecodeDepth}" min="0" max="10" 
+                 onchange="app.updatePortDecodeDepth(${port.port}, this.value)" 
+                 title="nginx解码深度 (默认: ${this.nginxDecodeDepth})">` :
+                '<span class="decode-depth-disabled">N/A</span>';
+            
             // Service Worker 补丁图标
             const swState = this.serviceWorkerStates.get(port.port) || { registered: false, loading: false };
             const swIcon = this.swSupported && this.isSubpath && port.proxy_url ? 
@@ -429,6 +441,7 @@ class PortApp {
                     <td class="port-cell">${port.port}</td>
                     <td class="url-cell">${urlCell}</td>
                     <td class="process-cell">${processInfo}</td>
+                    <td class="decode-depth-cell">${decodeDepthInput}</td>
                     <td class="sw-cell">${swIcon}</td>
                 </tr>
             `;
@@ -566,10 +579,13 @@ class PortApp {
                 scope += '/';
             }
             
-            // 使用模板 Service Worker，通过 URL 参数传递编码配置
-            const swScriptPath = `${this.basePath}/subpath_service_worker.js?decode_depth=${this.nginxDecodeDepth}`;
+            // 获取该端口的解码深度设置
+            const portDecodeDepth = this.portDecodeDepths.get(port) ?? this.nginxDecodeDepth;
             
-            console.log(`[SW注册] 使用模板 Service Worker，解码深度: ${this.nginxDecodeDepth}`);
+            // 使用模板 Service Worker，通过 URL 参数传递编码配置
+            const swScriptPath = `${this.basePath}/subpath_service_worker.js?decode_depth=${portDecodeDepth}`;
+            
+            console.log(`[SW注册] 端口 ${port} 使用解码深度: ${portDecodeDepth}`);
             
             // 注册 Service Worker
             const registration = await navigator.serviceWorker.register(
@@ -681,6 +697,27 @@ class PortApp {
         }
     }
 
+    updatePortDecodeDepth(port, value) {
+        // 更新端口的解码深度设置
+        const decodeDepth = parseInt(value);
+        if (isNaN(decodeDepth) || decodeDepth < 0) {
+            // 如果输入无效，恢复为该端口当前设置的值
+            const input = document.querySelector(`input[onchange*="${port}"]`);
+            if (input) {
+                input.value = this.portDecodeDepths.get(port);
+            }
+            return;
+        }
+        
+        // 保存设置
+        this.portDecodeDepths.set(port, decodeDepth);
+        
+        // 如果该端口已注册Service Worker，提示需要重新注册
+        const swState = this.serviceWorkerStates.get(port);
+        if (swState && swState.registered) {
+            console.log(`[解码深度] 端口 ${port} 解码深度已更新为 ${decodeDepth}，需要重新注册Service Worker生效`);
+        }
+    }
 
 }
 

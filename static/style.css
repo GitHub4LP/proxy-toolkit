@@ -100,6 +100,32 @@ body {
     cursor: help;
 }
 
+.decode-depth-cell {
+    width: 80px;
+    text-align: center;
+    padding: 8px;
+}
+
+.decode-depth-input {
+    width: 50px;
+    padding: 4px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    text-align: center;
+    font-size: 12px;
+}
+
+.decode-depth-input:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 1px rgba(0, 123, 255, 0.25);
+}
+
+.decode-depth-disabled {
+    color: #999;
+    font-size: 12px;
+}
+
 .sw-cell {
     width: 40px;
     text-align: center;
@@ -299,7 +325,7 @@ input[type="number"]:focus {
     }
 
     .port-table {
-        min-width: 600px;
+        min-width: 700px;
     }
 
     .port-table th,
