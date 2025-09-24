@@ -103,6 +103,13 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', event => {
     event.respondWith(
         (async () => {
+            const requestUrl = new URL(event.request.url);
+            
+            // 跨域请求直接转发
+            if (requestUrl.host !== self.location.host) {
+                return fetch(event.request);
+            }
+
             // 检查是否已被我们处理过，防止重定向循环
             if (isProcessedByServiceWorker(event.request.url)) {
                 // 移除处理标记并转发请求
@@ -114,36 +121,32 @@ self.addEventListener('fetch', event => {
                 return fetch(cleanRequest);
             }
 
-            let requestUrl = new URL(event.request.url);
-            if (requestUrl.host === self.location.host) {
-                let finalPathname = requestUrl.pathname;
-                
-                // 1. 编码处理
-                if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname)) {
-                    const encodedUrl = selectiveMultiEncodeUrl(requestUrl.toString());
-                    if (encodedUrl !== requestUrl.toString()) {
-                        finalPathname = new URL(encodedUrl).pathname;
-                    }
+            // 同域请求处理
+            let finalPathname = requestUrl.pathname;
+            
+            // 1. 编码处理
+            if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname)) {
+                const encodedUrl = selectiveMultiEncodeUrl(requestUrl.toString());
+                if (encodedUrl !== requestUrl.toString()) {
+                    finalPathname = new URL(encodedUrl).pathname;
                 }
-                
-                // 2. 路径匹配处理
-                const lcp = longestCommonPrefix(scope, finalPathname);
-                if (lcp !== scope) {
-                    finalPathname = finalPathname.replace(lcp, scope);
-                }
-                
-                // 3. 如果 pathname 有变化，使用307重定向统一处理
-                if (finalPathname !== requestUrl.pathname) {
-                    const newUrl = new URL(event.request.url);
-                    newUrl.pathname = finalPathname;
-                    // 添加处理标记，防止重定向循环
-                    const markedUrl = addProcessingMark(newUrl.href);
-                    return Response.redirect(markedUrl, 307);
-                }
-            } else {
-                event.request.headers["cross-origin-resource-policy"] = "cross-origin";
-                return fetch(event.request);
             }
+            
+            // 2. 路径匹配处理
+            const lcp = longestCommonPrefix(scope, finalPathname);
+            if (lcp !== scope) {
+                finalPathname = finalPathname.replace(lcp, scope);
+            }
+            
+            // 3. 如果 pathname 有变化，使用307重定向统一处理
+            if (finalPathname !== requestUrl.pathname) {
+                requestUrl.pathname = finalPathname;
+                // 添加处理标记，防止重定向循环
+                const markedUrl = addProcessingMark(requestUrl.href);
+                return Response.redirect(markedUrl, 307);
+            }
+            
+            // 同域请求无需处理，直接转发
             return fetch(event.request);
         })()
     );
