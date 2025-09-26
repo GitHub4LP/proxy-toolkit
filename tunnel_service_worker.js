@@ -3,6 +3,16 @@
 
 const scope = new URL(self.registration.scope).pathname;
 
+// 构建API端点URL - 基于Service Worker脚本位置
+function buildApiUrl() {
+    const scriptUrl = new URL(self.location.href);
+    const basePath = scriptUrl.pathname.replace('/tunnel_service_worker.js', '');
+    const apiPath = basePath + '/api/http-tunnel';
+    return scriptUrl.origin + apiPath;
+}
+
+const API_URL = buildApiUrl();
+
 // ==================== 工具函数 ====================
 
 // 从scope中提取端口号
@@ -83,7 +93,7 @@ function shouldTunnel(request) {
     }
     
     // 避免隧道请求自己调用自己
-    if (url.pathname.startsWith('/api/http-tunnel')) {
+    if (url.href === API_URL || url.pathname.endsWith('/api/http-tunnel')) {
         return false;
     }
     
@@ -131,12 +141,28 @@ async function packRequest(request) {
     // 构建目标URL（去除子路径前缀）
     const targetUrl = buildTargetUrl(request.url, scope);
     
-    return {
-        ...request,  // 解包Request对象的所有属性
-        url: targetUrl,  // 覆盖为转换后的目标URL
-        headers: Object.fromEntries(request.headers.entries()),  // 覆盖为序列化的headers
-        body: body  // 覆盖为处理过的body
+    // 构建请求对象，只包含必需的基础属性
+    const packedRequest = {
+        method: request.method,
+        url: targetUrl,  // 使用转换后的目标URL
+        headers: Object.fromEntries(request.headers.entries())
     };
+    
+    // 动态添加body（只有存在时才添加）
+    if (body !== null) {
+        packedRequest.body = body;
+    }
+    
+    // 动态添加其他存在的属性
+    const optionalProps = ['mode', 'credentials', 'cache', 'redirect', 'referrer', 'referrerPolicy', 'integrity', 'keepalive'];
+    
+    for (const prop of optionalProps) {
+        if (request[prop] !== undefined) {
+            packedRequest[prop] = request[prop];
+        }
+    }
+    
+    return packedRequest;
 }
 
 // 解包响应数据
@@ -161,7 +187,7 @@ async function tunnelRequest(originalRequest) {
         const packedRequest = await packRequest(originalRequest);
         
         // 2. 发送到隧道端点
-        const tunnelResponse = await fetch('/api/http-tunnel', {
+        const tunnelResponse = await fetch(API_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
