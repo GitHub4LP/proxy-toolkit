@@ -4,8 +4,10 @@ class PortApp {
         this.basePath = window.location.pathname.replace(/\/$/, '');
         this.serviceWorkerStates = new Map(); // 存储每个端口的 Service Worker 状态
         this.portDecodeDepths = new Map(); // 存储每个端口的解码深度设置
+        this.portStrategies = new Map(); // 存储每个端口的策略选择 (subpath/tunnel)
         this.addPortTimeout = null; // 防抖定时器
         this.nginxDecodeDepth = 0; // nginx 解码深度
+        this.loadPortStrategies(); // 加载保存的策略设置
         this.setupPortInput();
         this.initServiceWorkerSupport();
         
@@ -185,19 +187,19 @@ class PortApp {
         try {
             const registrations = await navigator.serviceWorker.getRegistrations();
             
-            // 只处理 subpath_service_worker.js 相关的 Service Worker
-            const subpathSWs = registrations.filter(registration => {
+            // 处理所有相关的 Service Worker（subpath 和 tunnel）
+            const relevantSWs = registrations.filter(registration => {
                 const scriptURL = registration.active ? registration.active.scriptURL : 
                                  registration.waiting ? registration.waiting.scriptURL :
                                  registration.installing ? registration.installing.scriptURL : '';
-                return scriptURL.includes('subpath_service_worker.js');
+                return scriptURL.includes('subpath_service_worker.js') || scriptURL.includes('tunnel_service_worker.js');
             });
             
             // 清空现有状态
             this.serviceWorkerStates.clear();
             
             // 为每个已注册的Service Worker更新状态
-            subpathSWs.forEach(registration => {
+            relevantSWs.forEach(registration => {
                 const scope = registration.scope;
                 
                 // 从scope中提取端口号
@@ -352,7 +354,7 @@ class PortApp {
             
             this.displayPorts(ports);
         } catch (error) {
-            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="6" class="error">获取端口列表失败</td></tr>';
+            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="8" class="error">获取端口列表失败</td></tr>';
         }
     }
 
@@ -394,7 +396,7 @@ class PortApp {
         const allPortsArray = Array.from(allPorts.values()).sort((a, b) => a.port - b.port);
         
         if (allPortsArray.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="no-ports">暂无端口数据</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="no-ports">暂无端口数据</td></tr>';
             return;
         }
 
@@ -435,6 +437,15 @@ class PortApp {
                 this.generateSwIcon(port.port, swState) : 
                 '<span class="sw-icon disabled" title="不支持">⚫</span>';
             
+            // 策略选择下拉框
+            const currentStrategy = this.getPortStrategy(port.port);
+            const strategySelect = this.swSupported && this.isSubpath && port.proxy_url ? 
+                `<select class="strategy-select" onchange="app.switchPortStrategy(${port.port}, this.value)">
+                    <option value="subpath" ${currentStrategy === 'subpath' ? 'selected' : ''}>子路径修复</option>
+                    <option value="tunnel" ${currentStrategy === 'tunnel' ? 'selected' : ''}>HTTP隧道</option>
+                </select>` :
+                '<span class="strategy-disabled">N/A</span>';
+            
             return `
                 <tr class="${port.source === 'service_worker' ? 'sw-only-row' : ''}">
                     <td class="status-cell">${listenIcon}</td>
@@ -443,6 +454,7 @@ class PortApp {
                     <td class="process-cell">${processInfo}</td>
                     <td class="decode-depth-cell">${decodeDepthInput}</td>
                     <td class="sw-cell">${swIcon}</td>
+                    <td class="strategy-cell">${strategySelect}</td>
                 </tr>
             `;
         }).join('');
@@ -453,19 +465,24 @@ class PortApp {
             return '<span class="sw-icon loading" title="处理中...">🔄</span>';
         }
         
+        const currentStrategy = this.getPortStrategy(port);
         const isRegistered = swState.registered;
-        const action = isRegistered ? 'unregisterServiceWorker' : 'registerServiceWorker';
+        const action = isRegistered ? 'unregisterPortServiceWorker' : 'registerPortServiceWorker';
+        
+        // 根据策略显示不同的Service Worker类型
+        const strategyName = currentStrategy === 'tunnel' ? 'tunnel_service_worker.js' : 'subpath_service_worker.js';
+        const strategyTitle = currentStrategy === 'tunnel' ? 'HTTP隧道' : '子路径修复';
         
         if (isRegistered) {
             // 注册成功 - 绿色补丁图标
             const stateInfo = swState.state ? ` (${swState.state})` : '';
-            return `<span class="sw-icon registered" onclick="app.${action}(${port})" title="已注册 subpath_service_worker.js${stateInfo}，点击注销">🟢</span>`;
+            return `<span class="sw-icon registered" onclick="app.${action}(${port})" title="已注册 ${strategyName}${stateInfo} (${strategyTitle})，点击注销">🟢</span>`;
         } else if (swState.failed) {
             // 注册失败 - 红色补丁图标
-            return `<span class="sw-icon failed" onclick="app.${action}(${port})" title="注册失败，点击重试">🔴</span>`;
+            return `<span class="sw-icon failed" onclick="app.${action}(${port})" title="注册失败，点击重试 (${strategyTitle})">🔴</span>`;
         } else {
             // 未注册 - 黄色补丁图标
-            return `<span class="sw-icon unregistered" onclick="app.${action}(${port})" title="未注册 subpath_service_worker.js，点击注册">🟡</span>`;
+            return `<span class="sw-icon unregistered" onclick="app.${action}(${port})" title="未注册 ${strategyName} (${strategyTitle})，点击注册">🟡</span>`;
         }
     }
 
@@ -549,7 +566,7 @@ class PortApp {
         }
     }
 
-    async registerServiceWorker(port) {
+    async registerPortServiceWorker(port) {
         if (!this.swSupported) {
             console.warn('浏览器不支持 Service Worker');
             return;
@@ -579,13 +596,20 @@ class PortApp {
                 scope += '/';
             }
             
-            // 获取该端口的解码深度设置
-            const portDecodeDepth = this.portDecodeDepths.get(port) ?? this.nginxDecodeDepth;
+            // 获取当前端口的策略
+            const currentStrategy = this.getPortStrategy(port);
             
-            // 使用模板 Service Worker，通过 URL 参数传递编码配置
-            const swScriptPath = `${this.basePath}/subpath_service_worker.js?decode_depth=${portDecodeDepth}`;
-            
-            console.log(`[SW注册] 端口 ${port} 使用解码深度: ${portDecodeDepth}`);
+            let swScriptPath;
+            if (currentStrategy === 'tunnel') {
+                // HTTP隧道策略
+                swScriptPath = `${this.basePath}/tunnel_service_worker.js`;
+                console.log(`[SW注册] 端口 ${port} 使用HTTP隧道策略`);
+            } else {
+                // 子路径修复策略（默认）
+                const portDecodeDepth = this.portDecodeDepths.get(port) ?? this.nginxDecodeDepth;
+                swScriptPath = `${this.basePath}/subpath_service_worker.js?decode_depth=${portDecodeDepth}`;
+                console.log(`[SW注册] 端口 ${port} 使用子路径修复策略，解码深度: ${portDecodeDepth}`);
+            }
             
             // 注册 Service Worker
             const registration = await navigator.serviceWorker.register(
@@ -630,61 +654,7 @@ class PortApp {
         this.refreshPortDisplay();
     }
 
-    async unregisterServiceWorker(port) {
-        if (!this.swSupported) return;
 
-        // 设置加载状态
-        this.serviceWorkerStates.set(port, { 
-            ...this.serviceWorkerStates.get(port), 
-            loading: true 
-        });
-        this.refreshPortDisplay();
-
-        try {
-            const swState = this.serviceWorkerStates.get(port);
-            
-            // 优先使用保存的 registration 对象
-            if (swState && swState.registration) {
-                await swState.registration.unregister();
-            } else {
-                // 回退到查找方式
-                const registrations = await navigator.serviceWorker.getRegistrations();
-                let found = false;
-                
-                for (const registration of registrations) {
-                    // 检查作用域是否匹配
-                    if (swState && swState.scope) {
-                        const regScope = new URL(registration.scope).pathname;
-                        if (regScope === swState.scope) {
-                            await registration.unregister();
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                
-                if (found) {
-                    console.log(`端口 ${port} 的 Service Worker 注销成功！`);
-                } else {
-                    console.warn(`未找到端口 ${port} 对应的 Service Worker，可能已经被注销`);
-                }
-            }
-
-            this.serviceWorkerStates.set(port, { 
-                registered: false, 
-                loading: false 
-            });
-            
-        } catch (error) {
-            // 注销Service Worker失败
-            this.serviceWorkerStates.set(port, { 
-                ...this.serviceWorkerStates.get(port), 
-                loading: false 
-            });
-        }
-        
-        this.refreshPortDisplay();
-    }
 
     async refreshPortDisplay() {
         // 重新渲染端口列表（不重新获取数据）
@@ -716,6 +686,87 @@ class PortApp {
         const swState = this.serviceWorkerStates.get(port);
         if (swState && swState.registered) {
             console.log(`[解码深度] 端口 ${port} 解码深度已更新为 ${decodeDepth}，需要重新注册Service Worker生效`);
+        }
+    }
+
+    // ==================== 策略管理方法 ====================
+    
+
+    
+    async unregisterPortServiceWorker(port) {
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        const proxyUrl = this.generateProxyUrlForPort(port);
+        
+        if (!proxyUrl) return;
+        
+        const url = new URL(proxyUrl, window.location.origin);
+        let targetScope = url.pathname;
+        if (!targetScope.endsWith('/')) {
+            targetScope += '/';
+        }
+        
+        for (const registration of registrations) {
+            const regScope = new URL(registration.scope).pathname;
+            if (regScope === targetScope) {
+                console.log(`[SW注销] 注销端口 ${port} 的Service Worker`);
+                await registration.unregister();
+                break;
+            }
+        }
+        
+        // 清理状态
+        this.serviceWorkerStates.delete(port);
+    }
+    
+    async switchPortStrategy(port, newStrategy) {
+        const oldStrategy = this.getPortStrategy(port);
+        
+        if (oldStrategy === newStrategy) {
+            return; // 策略没有变化，无需处理
+        }
+        
+        console.log(`[策略切换] 端口 ${port}: ${oldStrategy} -> ${newStrategy}`);
+        
+        // 如果当前端口已注册Service Worker，先注销
+        const swState = this.serviceWorkerStates.get(port);
+        if (swState && swState.registered) {
+            console.log(`[策略切换] 先注销端口 ${port} 的现有Service Worker`);
+            await this.unregisterPortServiceWorker(port);
+        }
+        
+        // 更新策略设置
+        this.portStrategies.set(port, newStrategy);
+        this.savePortStrategies();
+        
+        // 刷新界面显示
+        this.refreshPortDisplay();
+        
+        console.log(`[策略切换] 端口 ${port} 策略已更新为: ${newStrategy}`);
+    }
+
+    getPortStrategy(port) {
+        return this.portStrategies.get(port) || 'subpath'; // 默认策略
+    }
+    
+    savePortStrategies() {
+        try {
+            const strategies = Object.fromEntries(this.portStrategies);
+            localStorage.setItem('port-strategies', JSON.stringify(strategies));
+        } catch (error) {
+            console.warn('[策略保存] 保存失败:', error);
+        }
+    }
+    
+    loadPortStrategies() {
+        try {
+            const saved = localStorage.getItem('port-strategies');
+            if (saved) {
+                const strategies = JSON.parse(saved);
+                this.portStrategies = new Map(Object.entries(strategies));
+            }
+        } catch (error) {
+            console.warn('[策略加载] 加载失败:', error);
+            this.portStrategies = new Map();
         }
     }
 

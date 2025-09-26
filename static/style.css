@@ -132,6 +132,33 @@ body {
     padding: 8px;
 }
 
+.strategy-cell {
+    width: 100px;
+    text-align: center;
+    padding: 8px;
+}
+
+.strategy-select {
+    width: 90px;
+    padding: 4px;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+    font-size: 12px;
+    background: white;
+    cursor: pointer;
+}
+
+.strategy-select:focus {
+    outline: none;
+    border-color: #007bff;
+    box-shadow: 0 0 0 1px rgba(0, 123, 255, 0.25);
+}
+
+.strategy-disabled {
+    color: #999;
+    font-size: 12px;
+}
+
 
 
 .add-port-row {
