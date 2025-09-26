@@ -121,46 +121,54 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', event => {
-    event.respondWith(
-        (async () => {
-            const requestUrl = new URL(event.request.url);
-            
-            // 跨域请求直接转发
-            if (requestUrl.host !== self.location.host) {
-                return fetch(event.request);
-            }
+    // 导航请求放行
+    if (event.request.mode === 'navigate') {
+        return;
+    }
+    
+    const requestUrl = new URL(event.request.url);
+    
+    // 跨域请求放行
+    if (requestUrl.host !== self.location.host) {
+        return;
+    }
 
-            // 检查是否已被我们处理过，防止重定向循环
-            if (strategy.isProcessed(event.request.url)) {
-                // 移除处理标记并转发请求
+    // 清理已处理请求的标记
+    if (strategy.isProcessed(event.request.url)) {
+        event.respondWith(
+            (async () => {
                 const cleanRequest = strategy.removeMark(event.request);
                 return fetch(cleanRequest);
-            }
+            })()
+        );
+        return;
+    }
 
-            // 同域请求处理
-            let finalPathname = requestUrl.pathname;
-            
-            // 1. 编码处理
-            if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname)) {
-                finalPathname = selectiveMultiEncodePath(finalPathname);
-            }
-            
-            // 2. 路径匹配处理
-            const lcp = longestCommonPrefix(scope, finalPathname);
-            if (lcp !== scope) {
-                finalPathname = finalPathname.replace(lcp, scope);
-            }
-            
-            // 3. 如果 pathname 有变化，使用307重定向统一处理
-            if (finalPathname !== requestUrl.pathname) {
+    // 检查路径处理需求
+    let finalPathname = requestUrl.pathname;
+    let needsProcessing = false;
+    
+    // 编码处理
+    if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname)) {
+        finalPathname = selectiveMultiEncodePath(finalPathname);
+        needsProcessing = true;
+    }
+    
+    // 路径匹配处理
+    const lcp = longestCommonPrefix(scope, finalPathname);
+    if (lcp !== scope) {
+        finalPathname = finalPathname.replace(lcp, scope);
+        needsProcessing = true;
+    }
+    
+    // 需要处理时进行重定向
+    if (needsProcessing) {
+        event.respondWith(
+            (async () => {
                 requestUrl.pathname = finalPathname;
-                // 添加处理标记，防止重定向循环
                 const markedUrl = strategy.addMark(requestUrl.href);
                 return Response.redirect(markedUrl, 307);
-            }
-            
-            // 同域请求无需处理，直接转发
-            return fetch(event.request);
-        })()
-    );
+            })()
+        );
+    }
 });
