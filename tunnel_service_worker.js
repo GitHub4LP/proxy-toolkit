@@ -15,11 +15,47 @@ const API_URL = buildApiUrl();
 
 // ==================== 工具函数 ====================
 
-// 从scope中提取端口号
+// 通过对比路径差异提取端口号
 function extractPortFromScope(scope) {
-    // 从 /proxy/8080/ 或类似格式中提取端口号
-    const match = scope.match(/\/proxy\/(\d+)\//);
-    return match ? parseInt(match[1]) : null;
+    const scriptUrl = new URL(self.location.href);
+    const scriptPath = scriptUrl.pathname.replace('/tunnel_service_worker.js', '');
+    
+    // 分割路径为数组
+    const scriptParts = scriptPath.split('/').filter(p => p !== '');
+    const scopeParts = scope.split('/').filter(p => p !== '');
+    
+    // 检查路径长度是否相同
+    if (scriptParts.length !== scopeParts.length) {
+        console.error('[Tunnel SW] 路径结构不匹配');
+        return null;
+    }
+    
+    // 找出唯一的差异
+    let differenceIndex = -1;
+    let differenceCount = 0;
+    
+    for (let i = 0; i < scriptParts.length; i++) {
+        if (scriptParts[i] !== scopeParts[i]) {
+            differenceIndex = i;
+            differenceCount++;
+        }
+    }
+    
+    // 应该只有一个差异
+    if (differenceCount !== 1) {
+        console.error(`[Tunnel SW] 预期只有一个差异，实际发现${differenceCount}个`);
+        return null;
+    }
+    
+    // 验证差异是端口号
+    const scopePort = parseInt(scopeParts[differenceIndex]);
+    
+    if (isNaN(scopePort) || scopePort <= 0 || scopePort > 65535) {
+        console.error('[Tunnel SW] 差异不是有效的端口号');
+        return null;
+    }
+    
+    return scopePort;
 }
 
 // 检测是否包含编码字符
