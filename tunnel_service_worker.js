@@ -90,6 +90,29 @@ self.addEventListener('activate', (event) => {
     event.waitUntil(self.clients.claim());
 });
 
+self.addEventListener('message', (event) => {
+    if (event.data && event.data.type === 'FORCE_NAVIGATE_ALL_CLIENTS') {
+        console.log('[Tunnel SW] 收到强制刷新指令');
+        
+        // 立即处理，不使用 async/await 避免被注销中断
+        self.clients.matchAll({
+            includeUncontrolled: false,
+            type: 'window'
+        }).then(clients => {
+            console.log(`[Tunnel SW] 强制刷新 ${clients.length} 个客户端`);
+            
+            // 立即触发所有导航，不等待完成
+            clients.forEach(client => {
+                client.navigate(client.url).catch(error => {
+                    console.warn(`[Tunnel SW] 导航失败: ${client.url}`, error);
+                });
+            });
+        }).catch(error => {
+            console.warn('[Tunnel SW] 获取客户端失败:', error);
+        });
+    }
+});
+
 self.addEventListener('fetch', event => {
     if (event.request.mode === 'navigate') {
         return;

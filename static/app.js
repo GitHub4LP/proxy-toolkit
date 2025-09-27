@@ -705,17 +705,34 @@ class PortApp {
             targetScope += '/';
         }
         
+        let targetRegistration = null;
         for (const registration of registrations) {
             const regScope = new URL(registration.scope).pathname;
             if (regScope === targetScope) {
-                console.log(`[SW注销] 注销端口 ${port} 的Service Worker`);
-                await registration.unregister();
+                targetRegistration = registration;
                 break;
+            }
+        }
+        
+        if (targetRegistration) {
+            try {
+                console.log(`[SW注销] 端口 ${port} 尝试直接注销`);
+                await targetRegistration.unregister();
+                if (targetRegistration.active) {
+                    console.log(`[SW注销] 端口 ${port} 发送强制刷新消息`);
+                    targetRegistration.active.postMessage({
+                        type: 'FORCE_NAVIGATE_ALL_CLIENTS'
+                    });
+                }
+            } catch (error) {
+                // 注销异常，也尝试强制刷新
+                console.warn(`[SW注销] 端口 ${port} 注销异常:`, error);
             }
         }
         
         // 清理状态
         this.serviceWorkerStates.delete(port);
+        this.refreshPortDisplay();
     }
     
     async switchPortStrategy(port, newStrategy) {
