@@ -63,21 +63,41 @@ function hasEncodedChars(str) {
     return /%[0-9A-Fa-f]{2}/.test(str);
 }
 
-// 计算最长公共前缀
-function longestCommonPrefix(str1, str2) {
-    if (str1 === str2) {
-        return str1;
+// 计算最长公共路径段
+function longestCommonPathSegments(path1, path2) {
+    if (path1 === path2) {
+        return path1;
     }
-    let minLength = Math.min(str1.length, str2.length);
-    let prefix = [];
+    
+    // 分割为路径段，过滤空字符串
+    const segments1 = path1.split('/').filter(s => s !== '');
+    const segments2 = path2.split('/').filter(s => s !== '');
+    
+    // 逐段比对
+    let commonSegments = [];
+    const minLength = Math.min(segments1.length, segments2.length);
+    
     for (let i = 0; i < minLength; i++) {
-        if (str1[i] === str2[i]) {
-            prefix.push(str1[i]);
+        if (segments1[i] === segments2[i]) {
+            commonSegments.push(segments1[i]);
         } else {
-            break;
+            break; // 一旦有段不匹配就停止
         }
     }
-    return prefix.join('');
+    
+    // 重建路径
+    if (commonSegments.length === 0) {
+        return '/';
+    }
+    
+    const result = '/' + commonSegments.join('/');
+    
+    // 如果原路径以/结尾且所有段都匹配，保持这个格式
+    if (path1.endsWith('/') && commonSegments.length === segments1.length) {
+        return result + '/';
+    }
+    
+    return result;
 }
 
 
@@ -112,11 +132,11 @@ self.addEventListener('fetch', event => {
     
     const pathname = url.pathname;
     
-    // 计算最长公共前缀（复用这个结果）
-    const lcp = longestCommonPrefix(scope, pathname);
+    // 计算最长公共路径段（复用这个结果）
+    const commonPath = longestCommonPathSegments(scope, pathname);
     
     // 条件1: 路径不完整（缺少子路径前缀）
-    const pathIncomplete = lcp !== scope;
+    const pathIncomplete = commonPath !== scope;
     
     // 条件2: 路径中包含编码字符
     const hasEncoding = hasEncodedChars(pathname);
@@ -140,10 +160,10 @@ self.addEventListener('fetch', event => {
     // 提前构建目标URL（所有依赖都是同步的）
     let targetPath = pathname;
     
-    // 复用之前计算的lcp结果
+    // 复用之前计算的commonPath结果
     if (pathIncomplete) {
         // 路径不完整，需要补全子路径后再去除
-        targetPath = targetPath.replace(lcp, scope);
+        targetPath = targetPath.replace(commonPath, scope);
     }
     
     // 现在targetPath一定以scope开头，根据scope格式去除子路径前缀

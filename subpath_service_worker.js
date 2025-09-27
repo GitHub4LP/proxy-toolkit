@@ -87,41 +87,54 @@ function selectiveMultiEncodePath(pathname) {
     }
 }
 
-function longestCommonPrefix(str1, str2) {
-    if (str1 === str2) {
-        return str1;
+// 计算最长公共路径段
+function longestCommonPathSegments(path1, path2) {
+    if (path1 === path2) {
+        return path1;
     }
-    let minLength = Math.min(str1.length, str2.length);
-    let prefix = [];
+    
+    // 分割为路径段，过滤空字符串
+    const segments1 = path1.split('/').filter(s => s !== '');
+    const segments2 = path2.split('/').filter(s => s !== '');
+    
+    // 逐段比对
+    let commonSegments = [];
+    const minLength = Math.min(segments1.length, segments2.length);
+    
     for (let i = 0; i < minLength; i++) {
-        if (str1[i] === str2[i]) {
-            prefix.push(str1[i]);
+        if (segments1[i] === segments2[i]) {
+            commonSegments.push(segments1[i]);
         } else {
-            break;
+            break; // 一旦有段不匹配就停止
         }
     }
-    return prefix.join('');
+    
+    // 重建路径
+    if (commonSegments.length === 0) {
+        return '/';
+    }
+    
+    const result = '/' + commonSegments.join('/');
+    
+    // 如果原路径以/结尾且所有段都匹配，保持这个格式
+    if (path1.endsWith('/') && commonSegments.length === segments1.length) {
+        return result + '/';
+    }
+    
+    return result;
 }
 
 // ==================== Service Worker 事件处理 ====================
 self.addEventListener('install', (event) => {
-    event.waitUntil(
-        (async () => {
-            return self.skipWaiting();
-        })()
-    );
+    event.waitUntil(self.skipWaiting());
 });
 
 self.addEventListener('activate', (event) => {
-    event.waitUntil(
-        (async () => {
-            return self.clients.claim();
-        })()
-    );
+    event.waitUntil(self.clients.claim());
 });
 
 self.addEventListener('fetch', event => {
-    // 导航请求放行
+    // 导航请求放行 - 最优先判断
     if (event.request.mode === 'navigate') {
         return;
     }
@@ -135,40 +148,36 @@ self.addEventListener('fetch', event => {
 
     // 清理已处理请求的标记
     if (strategy.isProcessed(event.request.url)) {
-        event.respondWith(
-            (async () => {
-                const cleanRequest = strategy.removeMark(event.request);
-                return fetch(cleanRequest);
-            })()
-        );
+        // 提前准备清理后的请求对象
+        const cleanRequest = strategy.removeMark(event.request);
+        
+        event.respondWith(fetch(cleanRequest));
         return;
     }
 
-    // 检查路径处理需求
+    // 提前进行所有同步处理和判断
     let finalPathname = requestUrl.pathname;
     let needsProcessing = false;
     
-    // 编码处理
+    // 编码处理检查和应用
     if (NGINX_DECODE_DEPTH > 0 && hasEncodedChars(finalPathname)) {
         finalPathname = selectiveMultiEncodePath(finalPathname);
         needsProcessing = true;
     }
     
     // 路径匹配处理
-    const lcp = longestCommonPrefix(scope, finalPathname);
-    if (lcp !== scope) {
-        finalPathname = finalPathname.replace(lcp, scope);
+    const commonPath = longestCommonPathSegments(scope, finalPathname);
+    if (commonPath !== scope) {
+        finalPathname = finalPathname.replace(commonPath, scope);
         needsProcessing = true;
     }
     
-    // 需要处理时进行重定向
+    // 只有需要处理时才进行重定向
     if (needsProcessing) {
-        event.respondWith(
-            (async () => {
-                requestUrl.pathname = finalPathname;
-                const markedUrl = strategy.addMark(requestUrl.href);
-                return Response.redirect(markedUrl, 307);
-            })()
-        );
+        // 提前构建重定向URL（所有操作都是同步的）
+        requestUrl.pathname = finalPathname;
+        const markedUrl = strategy.addMark(requestUrl.href);
+        
+        event.respondWith(Response.redirect(markedUrl, 307));
     }
 });
