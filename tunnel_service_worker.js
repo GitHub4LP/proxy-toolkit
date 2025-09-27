@@ -10,7 +10,6 @@ function buildApiUrl() {
 const API_URL = buildApiUrl();
 
 function extractPortFromScope(scope) {
-function extractPortFromScope(scope) {
     const scriptUrl = new URL(self.location.href);
     const scriptPath = scriptUrl.pathname.replace('/tunnel_service_worker.js', '');
     
