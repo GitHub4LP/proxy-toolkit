@@ -1,5 +1,6 @@
-const NGINX_DECODE_DEPTH = {{NGINX_DECODE_DEPTH}};
-const LOOP_STRATEGY = 'url_param';
+const scriptUrl = new URL(self.location.href);
+const NGINX_DECODE_DEPTH = parseInt(scriptUrl.searchParams.get('decode_depth')) || 0;
+const LOOP_STRATEGY = scriptUrl.searchParams.get('loop_strategy') || 'url_param';
 const scope = new URL(self.registration.scope).pathname;
 
 function hasEncodedChars(str) {

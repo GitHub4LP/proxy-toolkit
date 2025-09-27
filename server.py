@@ -117,23 +117,17 @@ class PortServer:
         return web.json_response({"path": restored_path})
 
     async def service_worker_handler(self, request):
-        """提供 Service Worker 脚本 - 支持模板替换"""
+        """提供 Service Worker 脚本 - 直接返回静态文件"""
         try:
             sw_file = os.path.join(os.path.dirname(__file__), "subpath_service_worker.js")
             with open(sw_file, "r", encoding="utf-8") as f:
                 content = f.read()
             
-            # 获取核心编码配置参数
-            decode_depth = int(request.query.get('decode_depth', '2'))
-            
-            # 替换模板标记
-            content = content.replace('{{NGINX_DECODE_DEPTH}}', str(decode_depth))
-            
             return web.Response(
                 text=content,
                 content_type="application/javascript",
                 headers={
-                    "Service-Worker-Allowed": "/",  # 允许控制根路径下的所有作用域
+                    "Service-Worker-Allowed": "/",
                     "Cache-Control": "no-cache"
                 }
             )
