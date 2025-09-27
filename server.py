@@ -7,6 +7,7 @@ import asyncio
 import os
 import socket
 import time
+import urllib
 from typing import Dict, Optional
 
 import psutil
@@ -111,8 +112,9 @@ class PortServer:
 
     async def test_encoding_handler(self, request):
         """nginx解码深度检测端点 - 返回nginx解码后的路径"""
-        path = request.match_info.get("path", "")
-        return web.json_response({"path": path})
+        match_path = request.match_info.get("path", "")
+        restored_path = urllib.parse.quote(match_path, safe='')
+        return web.json_response({"path": restored_path})
 
     async def service_worker_handler(self, request):
         """提供 Service Worker 脚本 - 支持模板替换"""
