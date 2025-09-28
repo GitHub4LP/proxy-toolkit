@@ -438,7 +438,7 @@ class PortApp {
             
             this.displayPorts(ports);
         } catch (error) {
-            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="6" class="error">Failed to get port list</td></tr>';
+            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="5" class="error">获取端口列表失败</td></tr>';
         }
     }
 
@@ -452,7 +452,7 @@ class PortApp {
         const allPorts = this.mergePortData(ports);
         
         if (allPorts.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6" class="no-ports">No port data</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="no-ports">无端口数据</td></tr>';
             return;
         }
 
@@ -519,10 +519,10 @@ class PortApp {
         // URL链接 - 只有在有代理支持时才显示
         const urlCell = this.hasProxySupport && port.proxy_url ? 
             `<a href="${this.getAbsoluteUrl(port.proxy_url)}" target="_blank" class="url-link">${port.proxy_url}</a>` : 
-            '<span class="no-proxy">No proxy support</span>';
+            '<span class="no-proxy">无代理支持</span>';
         
-        // Service Worker相关控件 - 只有在有代理支持时才显示
-        const swControls = this.hasProxySupport ? this.renderServiceWorkerControls(port) : 
+        // Service Worker模式选择 - 只有在有代理支持时才显示
+        const swModeSelect = this.hasProxySupport ? this.renderServiceWorkerModeSelect(port) : 
             '<span class="no-proxy">N/A</span>';
         
         return `
@@ -531,58 +531,35 @@ class PortApp {
                 <td class="port-cell">${port.port}</td>
                 <td class="url-cell proxy-column">${urlCell}</td>
                 <td class="process-cell">${processInfo}</td>
-                <td class="sw-cell proxy-column">${swControls.swIcon}</td>
-                <td class="strategy-cell proxy-column">${swControls.strategy}</td>
+                <td class="sw-cell proxy-column">${swModeSelect}</td>
             </tr>
         `;
     }
 
-    renderServiceWorkerControls(port) {
-        // Service Worker 补丁图标
+    renderServiceWorkerModeSelect(port) {
+        if (!this.swEnabled || !port.proxy_url) {
+            return '<span class="sw-mode-disabled">不支持</span>';
+        }
+        
+        const currentMode = this.getPortMode(port.port);
         const swState = this.serviceWorkerStates.get(port.port) || { registered: false, loading: false };
-        const swIcon = this.swEnabled && port.proxy_url ? 
-            this.generateSwIcon(port.port, swState) : 
-            '<span class="sw-icon disabled" title="Not supported">⚫</span>';
         
-        // 策略选择下拉框
-        const currentStrategy = this.getPortStrategy(port.port);
-        const strategySelect = this.swEnabled && port.proxy_url ? 
-            `<select class="strategy-select" onchange="app.switchPortStrategy(${port.port}, this.value)">
-                <option value="subpath" ${currentStrategy === 'subpath' ? 'selected' : ''}>Subpath Fix</option>
-                <option value="tunnel" ${currentStrategy === 'tunnel' ? 'selected' : ''}>HTTP Tunnel</option>
-            </select>` :
-            '<span class="strategy-disabled">N/A</span>';
+        // 如果正在加载，显示加载状态
+        if (swState.loading) {
+            return '<div class="sw-mode-loading">处理中...</div>';
+        }
         
-        return {
-            swIcon: swIcon,
-            strategy: strategySelect
-        };
+        return `
+            <div class="sw-mode-group">
+                <label><input type="radio" name="sw-mode-${port.port}" value="none" ${currentMode === 'none' ? 'checked' : ''} onchange="app.switchPortMode(${port.port}, 'none')"> 无</label>
+                <label><input type="radio" name="sw-mode-${port.port}" value="subpath_url" ${currentMode === 'subpath_url' ? 'checked' : ''} onchange="app.switchPortMode(${port.port}, 'subpath_url')"> subpath[url_param]</label>
+                <label><input type="radio" name="sw-mode-${port.port}" value="subpath_mem" ${currentMode === 'subpath_mem' ? 'checked' : ''} onchange="app.switchPortMode(${port.port}, 'subpath_mem')"> subpath[memory_set]</label>
+                <label><input type="radio" name="sw-mode-${port.port}" value="tunnel" ${currentMode === 'tunnel' ? 'checked' : ''} onchange="app.switchPortMode(${port.port}, 'tunnel')"> tunnel</label>
+            </div>
+        `;
     }
 
-    generateSwIcon(port, swState) {
-        if (swState.loading) {
-            return '<span class="sw-icon loading" title="Processing...">🔄</span>';
-        }
-        
-        const currentStrategy = this.getPortStrategy(port);
-        const isRegistered = swState.registered;
-        const action = isRegistered ? 'unregisterPortServiceWorker' : 'registerPortServiceWorker';
-        
-        // 根据策略显示不同的Service Worker类型
-        const strategyTitle = currentStrategy === 'tunnel' ? 'HTTP Tunnel' : 'Subpath Fix';
-        
-        if (isRegistered) {
-            // 注册成功 - 绿色补丁图标
-            const stateInfo = swState.state ? ` (${swState.state})` : '';
-            return `<span class="sw-icon registered" onclick="app.${action}(${port})" title="Registered unified_service_worker.js${stateInfo} (${strategyTitle}), click to unregister">🟢</span>`;
-        } else if (swState.failed) {
-            // 注册失败 - 红色补丁图标
-            return `<span class="sw-icon failed" onclick="app.${action}(${port})" title="Registration failed, click to retry (${strategyTitle})">🔴</span>`;
-        } else {
-            // 未注册 - 黄色补丁图标
-            return `<span class="sw-icon unregistered" onclick="app.${action}(${port})" title="Not registered unified_service_worker.js (${strategyTitle}), click to register">🟡</span>`;
-        }
-    }
+
 
     formatProcessInfo(port) {
         // 当端口未被监听时，显示为空
@@ -690,21 +667,22 @@ class PortApp {
                 scope += '/';
             }
             
-            // 根据策略选择Service Worker脚本和参数
-            const currentStrategy = this.getPortStrategy(port);
+            // 根据模式选择Service Worker脚本和参数
+            const currentMode = this.getPortStrategy(port);
             let mode;
             
-            if (currentStrategy === 'tunnel') {
+            if (currentMode === 'tunnel') {
                 mode = 't';
+            } else if (currentMode === 'subpath_mem') {
+                mode = `s${this.nginxDecodeDepth}m`;
             } else {
-                const loopStrategy = 'url_param'; // 默认使用url_param策略
-                const loopChar = loopStrategy === 'memory_set' ? 'm' : 'u';
-                mode = `s${this.nginxDecodeDepth}${loopChar}`;
+                // subpath_url 或其他情况，默认使用 url_param
+                mode = `s${this.nginxDecodeDepth}u`;
             }
             
             const swScriptPath = `${this.basePath}/unified_service_worker.js?mode=${mode}`;
             
-            console.log(`[SW Register] Port ${port}: ${currentStrategy}`);
+            console.log(`[SW Register] Port ${port}: ${currentMode} (mode: ${mode})`);
             
             // 注册Service Worker
             const registration = await navigator.serviceWorker.register(swScriptPath, { scope });
@@ -769,16 +747,27 @@ class PortApp {
     
 
     
-    async unregisterPortServiceWorker(port) {
-        if (!this.swEnabled) {
-            console.log(`[SW] Port ${port}: Service Worker not enabled`);
-            return;
-        }
 
+    
+    getPortMode(port) {
+        // 检查是否有注册的Service Worker
+        const swState = this.serviceWorkerStates.get(port);
+        if (!swState || !swState.registered) {
+            return 'none';
+        }
+        
+        // 从保存的策略中获取模式
+        const strategy = this.portStrategies.get(port) || 'subpath_url';
+        return strategy;
+    }
+    
+    async findPortRegistration(port) {
+        if (!this.swEnabled) return null;
+        
         const registrations = await navigator.serviceWorker.getRegistrations();
         const proxyUrl = this.generateProxyUrlForPort(port);
         
-        if (!proxyUrl) return;
+        if (!proxyUrl) return null;
         
         // 统一转换为路径格式进行匹配
         let targetScope = this.normalizeUrl(proxyUrl);
@@ -786,66 +775,127 @@ class PortApp {
             targetScope += '/';
         }
         
-        let targetRegistration = null;
         for (const registration of registrations) {
             const regScope = this.normalizeUrl(registration.scope);
             if (regScope === targetScope) {
-                targetRegistration = registration;
-                break;
+                return registration;
             }
         }
         
-        if (targetRegistration) {
-            try {
-                console.log(`[SW Unregister] Port ${port}`);
-                await targetRegistration.unregister();
-                if (targetRegistration.active) {
-
-                    targetRegistration.active.postMessage({
-                        type: 'FORCE_NAVIGATE_ALL_CLIENTS'
-                    });
-                }
-                console.log(`[SW Unregister] Port ${port} unregistered successfully`);
-            } catch (error) {
-                console.warn(`[SW Unregister] Port ${port} unregister exception:`, error);
+        return null;
+    }
+    
+    updatePortStrategy(port, mode) {
+        this.portStrategies.set(port, mode);
+        this.savePortStrategies();
+    }
+    
+    clearPortStrategy(port) {
+        this.portStrategies.delete(port);
+        this.savePortStrategies();
+    }
+    
+    setLoadingState(port, loading) {
+        const currentState = this.serviceWorkerStates.get(port) || {};
+        this.serviceWorkerStates.set(port, { ...currentState, loading: loading });
+    }
+    
+    async switchFromNone(port, newMode) {
+        // None → 非None：直接注册新SW，等待完成
+        this.updatePortStrategy(port, newMode);
+        await this.registerPortServiceWorker(port);
+        this.refreshPortDisplay();
+    }
+    
+    async switchToNone(port) {
+        // 非None → None：注销SW
+        const oldRegistration = await this.findPortRegistration(port);
+        
+        if (oldRegistration) {
+            // 并行操作：启动注销和发送通知
+            const unregisterPromise = oldRegistration.unregister();
+            
+            // 立即发送通知（不等待unregister）
+            if (oldRegistration.active) {
+                oldRegistration.active.postMessage({
+                    type: 'FORCE_NAVIGATE_ALL_CLIENTS'
+                });
             }
-        } else {
-            console.warn(`[SW Unregister] Port ${port} not found`);
+            
+            // 等待注销完成
+            await unregisterPromise;
         }
         
-        // 清理状态
+        this.clearPortStrategy(port);
         this.serviceWorkerStates.delete(port);
         this.refreshPortDisplay();
     }
     
-    async switchPortStrategy(port, newStrategy) {
-        const oldStrategy = this.getPortStrategy(port);
+    async switchBetweenModes(port, newMode) {
+        // 非None → 非None：切换SW模式
+        const oldRegistration = await this.findPortRegistration(port);
         
-        if (oldStrategy === newStrategy) {
-            return; // 策略没有变化，无需处理
+        // 步骤1：启动注销（不等待，立马继续）
+        if (oldRegistration) {
+            oldRegistration.unregister(); // 不await
         }
         
-        console.log(`[Strategy Switch] Port ${port}: ${oldStrategy} -> ${newStrategy}`);
+        // 步骤2：立马启动注册（不等待，但保存Promise）
+        this.updatePortStrategy(port, newMode);
+        const registerPromise = this.registerPortServiceWorker(port); // 不await
         
-        // 如果当前端口已注册Service Worker，先注销
-        const swState = this.serviceWorkerStates.get(port);
-        if (swState && swState.registered) {
-
-            await this.unregisterPortServiceWorker(port);
+        // 步骤3：立马发送通知（不等待）
+        if (oldRegistration && oldRegistration.active) {
+            oldRegistration.active.postMessage({
+                type: 'FORCE_NAVIGATE_ALL_CLIENTS'
+            }); // 不await
         }
         
-        // 更新策略设置
-        this.portStrategies.set(port, newStrategy);
-        this.savePortStrategies();
+        // 步骤4：等待register完成后更新UI
+        await registerPromise;
+        this.refreshPortDisplay();
+    }
+    
+    async switchPortMode(port, newMode) {
+        const oldMode = this.getPortMode(port);
         
-        // 刷新界面显示
+        if (oldMode === newMode) {
+            return; // 模式没有变化，无需处理
+        }
+        
+        console.log(`[Mode Switch] Port ${port}: ${oldMode} -> ${newMode}`);
+        
+        // 设置加载状态
+        this.setLoadingState(port, true);
         this.refreshPortDisplay();
         
-        console.log(`[Strategy Switch] Port ${port}: ${newStrategy}`);
+        try {
+            if (newMode === 'none') {
+                // 场景1：非None → None
+                await this.switchToNone(port);
+            } else if (oldMode === 'none') {
+                // 场景2：None → 非None  
+                await this.switchFromNone(port, newMode);
+            } else {
+                // 场景3：非None → 非None
+                await this.switchBetweenModes(port, newMode);
+            }
+            
+            console.log(`[Mode Switch] Port ${port}: ${newMode} completed`);
+            
+        } catch (error) {
+            console.error(`[Mode Switch] Port ${port} failed:`, error);
+        } finally {
+            this.setLoadingState(port, false);
+            // 注意：refreshPortDisplay在各个子方法中调用，这里不重复调用
+        }
     }
 
     getPortStrategy(port) {
-        return this.portStrategies.get(port) || 'subpath'; // 默认策略
+        const mode = this.portStrategies.get(port) || 'subpath_url';
+        // 兼容旧的策略名称
+        if (mode === 'subpath') return 'subpath_url';
+        return mode;
     }
     
     savePortStrategies() {
