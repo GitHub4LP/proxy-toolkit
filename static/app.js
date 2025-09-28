@@ -330,14 +330,14 @@ class PortApp {
                         state: state
                     });
                     
-                    console.log(`[SW State] Port ${port}: ${state} (script: ${scriptURL})`);
+
                 } else {
-                    console.warn(`[SW State] Cannot extract port from scope, ignoring: ${registration.scope} (script: ${scriptURL})`);
+
                 }
             }
             
         } catch (error) {
-            console.error('[SW State] Update failed:', error);
+
         }
     }
 
