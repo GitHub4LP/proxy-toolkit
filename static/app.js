@@ -90,6 +90,34 @@ class PortApp {
         }
     }
 
+    isOurServiceWorker(scriptURL) {
+        // 检查Service Worker脚本是否来自当前服务
+        if (!scriptURL) return false;
+        
+        try {
+            const currentOrigin = window.location.origin;
+            const currentBasePath = this.basePath;
+            const expectedScriptPrefix = `${currentOrigin}${currentBasePath}/`;
+            
+            // 检查脚本URL是否以当前服务的前缀开始
+            if (!scriptURL.startsWith(expectedScriptPrefix)) {
+                return false;
+            }
+            
+            // 检查是否是我们的Service Worker脚本
+            const scriptName = scriptURL.substring(expectedScriptPrefix.length);
+            const isOurScript = scriptName.startsWith('subpath_service_worker.js') || 
+                               scriptName.startsWith('tunnel_service_worker.js');
+            
+            console.log(`[SW检查] 脚本: ${scriptURL}, 是否为我们的: ${isOurScript}`);
+            return isOurScript;
+            
+        } catch (error) {
+            console.warn(`[SW检查] 检查脚本URL失败: ${scriptURL}`, error);
+            return false;
+        }
+    }
+
     async detectNginxEncoding() {
         try {
             const testSegment = "test/path";  // 原始测试路径段
@@ -236,10 +264,8 @@ class PortApp {
                                  registration.waiting?.scriptURL ||
                                  registration.installing?.scriptURL || '';
                 
-                // 通过脚本名称识别我们的Service Worker
-                if (scriptURL.includes('subpath_service_worker.js') || 
-                    scriptURL.includes('tunnel_service_worker.js')) {
-                    
+                // 检查Service Worker是否来自当前服务
+                if (this.isOurServiceWorker(scriptURL)) {
                     await registration.unregister();
                     cleanedCount++;
                     console.log(`[SW清理] 已清理: ${scriptURL}`);
@@ -269,9 +295,8 @@ class PortApp {
                                  registration.waiting?.scriptURL ||
                                  registration.installing?.scriptURL || '';
                 
-                // 只处理我们的Service Worker
-                if (!scriptURL.includes('subpath_service_worker.js') && 
-                    !scriptURL.includes('tunnel_service_worker.js')) {
+                // 只处理来自当前服务的Service Worker
+                if (!this.isOurServiceWorker(scriptURL)) {
                     continue;
                 }
                 
@@ -290,7 +315,9 @@ class PortApp {
                         state: state
                     });
                     
-                    console.log(`[SW状态] 端口 ${port}: ${state}`);
+                    console.log(`[SW状态] 端口 ${port}: ${state} (脚本: ${scriptURL})`);
+                } else {
+                    console.warn(`[SW状态] 无法从scope提取端口号，忽略: ${registration.scope} (脚本: ${scriptURL})`);
                 }
             }
             
@@ -316,7 +343,8 @@ class PortApp {
             return port;
         }
         
-        console.warn(`[端口提取] 无法从scope提取端口: ${normalizedScope}`);
+        // 对于无法匹配的scope，不输出警告，因为可能是其他环境的Service Worker
+        console.log(`[端口提取] scope不匹配当前模板，忽略: ${normalizedScope}`);
         return null;
     }
 
