@@ -1,23 +1,23 @@
-// 端口管理服务前端应用
+// Port management service frontend app
 class PortApp {
     constructor() {
         this.basePath = window.location.pathname.replace(/\/$/, '');
-        this.serviceWorkerStates = new Map(); // 存储每个端口的 Service Worker 状态
-        this.portDecodeDepths = new Map(); // 存储每个端口的解码深度设置
-        this.portStrategies = new Map(); // 存储每个端口的策略选择 (subpath/tunnel)
-        this.addPortTimeout = null; // 防抖定时器
-        this.nginxDecodeDepth = 0; // nginx 解码深度
+        this.serviceWorkerStates = new Map(); // Store Service Worker states for each port
+        this.portDecodeDepths = new Map(); // Store decode depth settings for each port
+        this.portStrategies = new Map(); // Store strategy selection for each port (subpath/tunnel)
+        this.addPortTimeout = null; // Debounce timer
+        this.nginxDecodeDepth = 0; // nginx decode depth
         
-        // URL模板相关
+        // URL template related
         this.urlTemplate = null;
         this.hasProxySupport = false;
-        this.templateRegex = null; // 缓存编译的正则
+        this.templateRegex = null; // Cache compiled regex
         
-        this.loadPortStrategies(); // 加载保存的策略设置
+        this.loadPortStrategies(); // Load saved strategy settings
         this.setupPortInput();
         this.initServiceWorkerSupport();
         
-        // 先检测Service Worker状态，再刷新端口
+        // First detect Service Worker status, then refresh ports
         this.initializeApp();
         
         // 定期刷新端口信息
@@ -53,17 +53,17 @@ class PortApp {
             // 预编译正则表达式
             if (this.urlTemplate) {
                 this.templateRegex = this.compileTemplateRegex(this.urlTemplate);
-                console.log(`[模板] 加载成功: ${this.urlTemplate}`);
+                console.log(`[Template] ${this.urlTemplate}`);
             } else {
-                console.log('[模板] 当前环境不支持代理');
+                console.log('[Template] No proxy support');
             }
             
             // 重新设置Service Worker启用状态
             this.swEnabled = this.swSupported && this.isSubpath && this.hasProxySupport;
-            console.log(`[SW] Service Worker启用状态: ${this.swEnabled} (支持: ${this.swSupported}, 子路径: ${this.isSubpath}, 代理: ${this.hasProxySupport})`);
+            console.log(`[SW] Enabled: ${this.swEnabled}`);
             
         } catch (error) {
-            console.warn('[模板] 加载失败:', error);
+            console.warn('[Template] Load failed:', error);
             this.urlTemplate = null;
             this.hasProxySupport = false;
             this.swEnabled = false;
@@ -79,7 +79,7 @@ class PortApp {
         // 将{{port}}替换为数字捕获组
         const pattern = escaped.replace('\\{\\{port\\}\\}', '(\\d+)');
         
-        console.log(`[正则编译] 模板路径: ${templatePath} -> 正则: ${pattern}`);
+
         return new RegExp(pattern);
     }
 
@@ -124,11 +124,11 @@ class PortApp {
             const isOurScript = scriptName.startsWith('subpath_service_worker.js') || 
                                scriptName.startsWith('tunnel_service_worker.js');
             
-            console.log(`[SW检查] 脚本: ${scriptURL}, 是否为我们的: ${isOurScript}`);
+
             return isOurScript;
             
         } catch (error) {
-            console.warn(`[SW检查] 检查脚本URL失败: ${scriptURL}`, error);
+
             return false;
         }
     }
@@ -176,10 +176,10 @@ class PortApp {
                 const verified = await this.verifyNginxDecodeDepth(baseEncoded, detectedDepth);
                 if (verified) {
                     this.nginxDecodeDepth = detectedDepth;
-                    console.log(`[编码检测] NGINX_DECODE_DEPTH: ${this.nginxDecodeDepth} (验证通过)`);
+                    console.log(`[Encoding] Depth: ${this.nginxDecodeDepth}`);
                     return;
                 } else {
-                    console.warn(`[编码验证] 层数${maxLayers}检测失败，增加检测层数重试`);
+                    console.warn(`[Encoding] Layer ${maxLayers} failed, retrying`);
                 }
                 
                 // 增加检测层数重试
@@ -188,10 +188,10 @@ class PortApp {
             
             // 所有尝试都失败，设置为0
             this.nginxDecodeDepth = 0;
-            console.warn(`[编码检测] 达到最大尝试次数${maxAttempts}，放弃检测，设置为0`);
+            console.warn(`[Encoding] Max attempts reached, set to 0`);
             
         } catch (error) {
-            console.error('[编码检测] 发生异常:', error);
+            console.error('[Encoding] Exception:', error);
             this.nginxDecodeDepth = 0;
         }
     }
@@ -213,7 +213,7 @@ class PortApp {
             }
             return false;
         } catch (error) {
-            console.error('[编码验证] 验证过程异常:', error);
+            console.error('[Encoding] Verification exception:', error);
             return false;
         }
     }
@@ -283,16 +283,16 @@ class PortApp {
                 if (this.isOurServiceWorker(scriptURL)) {
                     await registration.unregister();
                     cleanedCount++;
-                    console.log(`[SW清理] 已清理: ${scriptURL}`);
+                    console.log(`[SW Cleanup] Cleaned: ${scriptURL}`);
                 }
             }
             
             if (cleanedCount > 0) {
-                console.log(`[SW清理] 共清理 ${cleanedCount} 个Service Worker`);
+                console.log(`[SW Cleanup] Cleaned ${cleanedCount} Service Workers`);
                 this.displayServiceWorkerInfo();
             }
         } catch (error) {
-            console.error('[SW清理] 清理失败:', error);
+            console.error('[SW Cleanup] Failed:', error);
         }
     }
 
@@ -330,20 +330,20 @@ class PortApp {
                         state: state
                     });
                     
-                    console.log(`[SW状态] 端口 ${port}: ${state} (脚本: ${scriptURL})`);
+                    console.log(`[SW State] Port ${port}: ${state} (script: ${scriptURL})`);
                 } else {
-                    console.warn(`[SW状态] 无法从scope提取端口号，忽略: ${registration.scope} (脚本: ${scriptURL})`);
+                    console.warn(`[SW State] Cannot extract port from scope, ignoring: ${registration.scope} (script: ${scriptURL})`);
                 }
             }
             
         } catch (error) {
-            console.error('[SW状态] 更新失败:', error);
+            console.error('[SW State] Update failed:', error);
         }
     }
 
     extractPortFromScope(scope) {
         if (!this.templateRegex) {
-            console.warn('[端口提取] 无模板正则，无法解析scope');
+
             return null;
         }
         
@@ -354,23 +354,23 @@ class PortApp {
         const match = normalizedScope.match(this.templateRegex);
         if (match && match[1]) {
             const port = parseInt(match[1]);
-            console.log(`[端口提取] scope: ${normalizedScope} -> 端口: ${port}`);
+
             return port;
         }
         
         // 对于无法匹配的scope，输出调试信息
-        console.log(`[端口提取] scope不匹配模板，忽略: ${normalizedScope} (模板正则: ${this.templateRegex})`);
+
         return null;
     }
 
     generateProxyUrlForPort(port) {
         if (!this.urlTemplate) {
-            console.warn(`[URL生成] 无模板，端口 ${port} 无法生成代理URL`);
+
             return null;
         }
         
         const proxyUrl = this.urlTemplate.replace('{{port}}', port.toString());
-        console.log(`[URL生成] 端口 ${port} -> ${proxyUrl}`);
+
         return proxyUrl;
     }
 
@@ -393,7 +393,7 @@ class PortApp {
                 // 刷新显示
                 this.refreshPorts();
             } else {
-                console.warn('未找到对应的 Service Worker');
+                console.warn('Service Worker not found');
             }
         } catch (error) {
             // 注销失败
@@ -405,7 +405,7 @@ class PortApp {
         const port = portInput.value;
         
         if (!port || port < 1 || port > 65535) {
-            console.warn('请输入有效的端口号');
+            console.warn('Please enter valid port number');
             return;
         }
 
@@ -440,7 +440,7 @@ class PortApp {
             
             this.displayPorts(ports);
         } catch (error) {
-            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="8" class="error">获取端口列表失败</td></tr>';
+            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="8" class="error">Failed to get port list</td></tr>';
         }
     }
 
@@ -454,7 +454,7 @@ class PortApp {
         const allPorts = this.mergePortData(ports);
         
         if (allPorts.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="no-ports">暂无端口数据</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8" class="no-ports">No port data</td></tr>';
             return;
         }
 
@@ -508,11 +508,11 @@ class PortApp {
         // 监听状态图标
         let listenIcon;
         if (port.source === 'service_worker') {
-            listenIcon = '<span class="status-icon closed" title="未监听">●</span>';
+            listenIcon = '<span class="status-icon closed" title="Not listening">●</span>';
         } else if (port.is_listening) {
-            listenIcon = '<span class="status-icon listening" title="监听中">●</span>';
+            listenIcon = '<span class="status-icon listening" title="Listening">●</span>';
         } else {
-            listenIcon = '<span class="status-icon closed" title="未监听">●</span>';
+            listenIcon = '<span class="status-icon closed" title="Not listening">●</span>';
         }
         
         // 进程信息
@@ -521,7 +521,7 @@ class PortApp {
         // URL链接 - 只有在有代理支持时才显示
         const urlCell = this.hasProxySupport && port.proxy_url ? 
             `<a href="${this.getAbsoluteUrl(port.proxy_url)}" target="_blank" class="url-link">${port.proxy_url}</a>` : 
-            '<span class="no-proxy">无代理支持</span>';
+            '<span class="no-proxy">No proxy support</span>';
         
         // Service Worker相关控件 - 只有在有代理支持时才显示
         const swControls = this.hasProxySupport ? this.renderServiceWorkerControls(port) : 
@@ -549,21 +549,21 @@ class PortApp {
         const decodeDepthInput = this.swEnabled && port.proxy_url ? 
             `<input type="number" class="decode-depth-input" value="${currentDecodeDepth}" min="0" max="10" 
              onchange="app.updatePortDecodeDepth(${port.port}, this.value)" 
-             title="nginx解码深度 (默认: ${this.nginxDecodeDepth})">` :
+             title="nginx decode depth (default: ${this.nginxDecodeDepth})">` :
             '<span class="decode-depth-disabled">N/A</span>';
         
         // Service Worker 补丁图标
         const swState = this.serviceWorkerStates.get(port.port) || { registered: false, loading: false };
         const swIcon = this.swEnabled && port.proxy_url ? 
             this.generateSwIcon(port.port, swState) : 
-            '<span class="sw-icon disabled" title="不支持">⚫</span>';
+            '<span class="sw-icon disabled" title="Not supported">⚫</span>';
         
         // 策略选择下拉框
         const currentStrategy = this.getPortStrategy(port.port);
         const strategySelect = this.swEnabled && port.proxy_url ? 
             `<select class="strategy-select" onchange="app.switchPortStrategy(${port.port}, this.value)">
-                <option value="subpath" ${currentStrategy === 'subpath' ? 'selected' : ''}>子路径修复</option>
-                <option value="tunnel" ${currentStrategy === 'tunnel' ? 'selected' : ''}>HTTP隧道</option>
+                <option value="subpath" ${currentStrategy === 'subpath' ? 'selected' : ''}>Subpath Fix</option>
+                <option value="tunnel" ${currentStrategy === 'tunnel' ? 'selected' : ''}>HTTP Tunnel</option>
             </select>` :
             '<span class="strategy-disabled">N/A</span>';
         
@@ -576,7 +576,7 @@ class PortApp {
 
     generateSwIcon(port, swState) {
         if (swState.loading) {
-            return '<span class="sw-icon loading" title="处理中...">🔄</span>';
+            return '<span class="sw-icon loading" title="Processing...">🔄</span>';
         }
         
         const currentStrategy = this.getPortStrategy(port);
@@ -585,18 +585,18 @@ class PortApp {
         
         // 根据策略显示不同的Service Worker类型
         const strategyName = currentStrategy === 'tunnel' ? 'tunnel_service_worker.js' : 'subpath_service_worker.js';
-        const strategyTitle = currentStrategy === 'tunnel' ? 'HTTP隧道' : '子路径修复';
+        const strategyTitle = currentStrategy === 'tunnel' ? 'HTTP Tunnel' : 'Subpath Fix';
         
         if (isRegistered) {
             // 注册成功 - 绿色补丁图标
             const stateInfo = swState.state ? ` (${swState.state})` : '';
-            return `<span class="sw-icon registered" onclick="app.${action}(${port})" title="已注册 ${strategyName}${stateInfo} (${strategyTitle})，点击注销">🟢</span>`;
+            return `<span class="sw-icon registered" onclick="app.${action}(${port})" title="Registered ${strategyName}${stateInfo} (${strategyTitle}), click to unregister">🟢</span>`;
         } else if (swState.failed) {
             // 注册失败 - 红色补丁图标
-            return `<span class="sw-icon failed" onclick="app.${action}(${port})" title="注册失败，点击重试 (${strategyTitle})">🔴</span>`;
+            return `<span class="sw-icon failed" onclick="app.${action}(${port})" title="Registration failed, click to retry (${strategyTitle})">🔴</span>`;
         } else {
             // 未注册 - 黄色补丁图标
-            return `<span class="sw-icon unregistered" onclick="app.${action}(${port})" title="未注册 ${strategyName} (${strategyTitle})，点击注册">🟡</span>`;
+            return `<span class="sw-icon unregistered" onclick="app.${action}(${port})" title="Not registered ${strategyName} (${strategyTitle}), click to register">🟡</span>`;
         }
     }
 
@@ -682,7 +682,7 @@ class PortApp {
 
     async registerPortServiceWorker(port) {
         if (!this.swEnabled) {
-            console.log(`[SW] 端口 ${port}: Service Worker功能未启用`);
+            console.log(`[SW] Port ${port}: Service Worker not enabled`);
             return;
         }
 
@@ -697,7 +697,7 @@ class PortApp {
             // 使用模板生成代理URL
             const proxyUrl = this.generateProxyUrlForPort(port);
             if (!proxyUrl) {
-                throw new Error('无法生成代理URL');
+                throw new Error('Cannot generate proxy URL');
             }
 
             // 确定Service Worker作用域
@@ -717,7 +717,7 @@ class PortApp {
                 swScriptPath = `${this.basePath}/subpath_service_worker.js?decode_depth=${portDecodeDepth}`;
             }
             
-            console.log(`[SW注册] 端口 ${port}: ${currentStrategy} 策略, scope: ${scope}`);
+            console.log(`[SW Register] Port ${port}: ${currentStrategy}`);
             
             // 注册Service Worker
             const registration = await navigator.serviceWorker.register(swScriptPath, { scope });
@@ -736,10 +736,10 @@ class PortApp {
                 state: 'active'
             });
             
-            console.log(`[SW注册] 端口 ${port} 注册成功`);
+            console.log(`[SW Register] Port ${port} registered successfully`);
             
         } catch (error) {
-            console.error(`[SW注册] 端口 ${port} 注册失败:`, error);
+            console.error(`[SW Register] Port ${port} registration failed:`, error);
             this.serviceWorkerStates.set(port, { 
                 registered: false, 
                 loading: false,
@@ -794,7 +794,7 @@ class PortApp {
         // 如果该端口已注册Service Worker，提示需要重新注册
         const swState = this.serviceWorkerStates.get(port);
         if (swState && swState.registered) {
-            console.log(`[解码深度] 端口 ${port} 解码深度已更新为 ${decodeDepth}，需要重新注册Service Worker生效`);
+
         }
     }
 
@@ -804,7 +804,7 @@ class PortApp {
     
     async unregisterPortServiceWorker(port) {
         if (!this.swEnabled) {
-            console.log(`[SW] 端口 ${port}: Service Worker功能未启用`);
+            console.log(`[SW] Port ${port}: Service Worker not enabled`);
             return;
         }
 
@@ -830,20 +830,20 @@ class PortApp {
         
         if (targetRegistration) {
             try {
-                console.log(`[SW注销] 端口 ${port} 尝试注销，目标scope: ${targetScope}`);
+                console.log(`[SW Unregister] Port ${port}`);
                 await targetRegistration.unregister();
                 if (targetRegistration.active) {
-                    console.log(`[SW注销] 端口 ${port} 发送强制刷新消息`);
+
                     targetRegistration.active.postMessage({
                         type: 'FORCE_NAVIGATE_ALL_CLIENTS'
                     });
                 }
-                console.log(`[SW注销] 端口 ${port} 注销成功`);
+                console.log(`[SW Unregister] Port ${port} unregistered successfully`);
             } catch (error) {
-                console.warn(`[SW注销] 端口 ${port} 注销异常:`, error);
+                console.warn(`[SW Unregister] Port ${port} unregister exception:`, error);
             }
         } else {
-            console.warn(`[SW注销] 端口 ${port} 未找到匹配的Service Worker，目标scope: ${targetScope}`);
+            console.warn(`[SW Unregister] Port ${port} not found`);
         }
         
         // 清理状态
@@ -858,12 +858,12 @@ class PortApp {
             return; // 策略没有变化，无需处理
         }
         
-        console.log(`[策略切换] 端口 ${port}: ${oldStrategy} -> ${newStrategy}`);
+        console.log(`[Strategy Switch] Port ${port}: ${oldStrategy} -> ${newStrategy}`);
         
         // 如果当前端口已注册Service Worker，先注销
         const swState = this.serviceWorkerStates.get(port);
         if (swState && swState.registered) {
-            console.log(`[策略切换] 先注销端口 ${port} 的现有Service Worker`);
+
             await this.unregisterPortServiceWorker(port);
         }
         
@@ -874,7 +874,7 @@ class PortApp {
         // 刷新界面显示
         this.refreshPortDisplay();
         
-        console.log(`[策略切换] 端口 ${port} 策略已更新为: ${newStrategy}`);
+        console.log(`[Strategy Switch] Port ${port}: ${newStrategy}`);
     }
 
     getPortStrategy(port) {
@@ -886,7 +886,7 @@ class PortApp {
             const strategies = Object.fromEntries(this.portStrategies);
             localStorage.setItem('port-strategies', JSON.stringify(strategies));
         } catch (error) {
-            console.warn('[策略保存] 保存失败:', error);
+            console.warn('[Strategy Save] Save failed:', error);
         }
     }
     
@@ -898,7 +898,7 @@ class PortApp {
                 this.portStrategies = new Map(Object.entries(strategies));
             }
         } catch (error) {
-            console.warn('[策略加载] 加载失败:', error);
+            console.warn('[Strategy Load] Load failed:', error);
             this.portStrategies = new Map();
         }
     }
