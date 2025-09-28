@@ -121,8 +121,7 @@ class PortApp {
             
             // 检查是否是我们的Service Worker脚本
             const scriptName = scriptURL.substring(expectedScriptPrefix.length);
-            const isOurScript = scriptName.startsWith('subpath_service_worker.js') || 
-                               scriptName.startsWith('tunnel_service_worker.js');
+            const isOurScript = scriptName.startsWith('unified_service_worker.js');
             
 
             return isOurScript;
@@ -584,19 +583,18 @@ class PortApp {
         const action = isRegistered ? 'unregisterPortServiceWorker' : 'registerPortServiceWorker';
         
         // 根据策略显示不同的Service Worker类型
-        const strategyName = currentStrategy === 'tunnel' ? 'tunnel_service_worker.js' : 'subpath_service_worker.js';
         const strategyTitle = currentStrategy === 'tunnel' ? 'HTTP Tunnel' : 'Subpath Fix';
         
         if (isRegistered) {
             // 注册成功 - 绿色补丁图标
             const stateInfo = swState.state ? ` (${swState.state})` : '';
-            return `<span class="sw-icon registered" onclick="app.${action}(${port})" title="Registered ${strategyName}${stateInfo} (${strategyTitle}), click to unregister">🟢</span>`;
+            return `<span class="sw-icon registered" onclick="app.${action}(${port})" title="Registered unified_service_worker.js${stateInfo} (${strategyTitle}), click to unregister">🟢</span>`;
         } else if (swState.failed) {
             // 注册失败 - 红色补丁图标
             return `<span class="sw-icon failed" onclick="app.${action}(${port})" title="Registration failed, click to retry (${strategyTitle})">🔴</span>`;
         } else {
             // 未注册 - 黄色补丁图标
-            return `<span class="sw-icon unregistered" onclick="app.${action}(${port})" title="Not registered ${strategyName} (${strategyTitle}), click to register">🟡</span>`;
+            return `<span class="sw-icon unregistered" onclick="app.${action}(${port})" title="Not registered unified_service_worker.js (${strategyTitle}), click to register">🟡</span>`;
         }
     }
 
@@ -706,16 +704,20 @@ class PortApp {
                 scope += '/';
             }
             
-            // 根据策略选择Service Worker脚本
+            // 根据策略选择Service Worker脚本和参数
             const currentStrategy = this.getPortStrategy(port);
-            let swScriptPath;
+            let mode;
             
             if (currentStrategy === 'tunnel') {
-                swScriptPath = `${this.basePath}/tunnel_service_worker.js`;
+                mode = 't';
             } else {
                 const portDecodeDepth = this.portDecodeDepths.get(port) ?? this.nginxDecodeDepth;
-                swScriptPath = `${this.basePath}/subpath_service_worker.js?decode_depth=${portDecodeDepth}`;
+                const loopStrategy = 'url_param'; // 默认使用url_param策略
+                const loopChar = loopStrategy === 'memory_set' ? 'm' : 'u';
+                mode = `s${portDecodeDepth}${loopChar}`;
             }
+            
+            const swScriptPath = `${this.basePath}/unified_service_worker.js?mode=${mode}`;
             
             console.log(`[SW Register] Port ${port}: ${currentStrategy}`);
             

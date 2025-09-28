@@ -67,8 +67,7 @@ class PortServer:
         # HTTP隧道处理
         self.app.router.add_post("/api/http-tunnel", self.http_tunnel_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
-        self.app.router.add_get("/subpath_service_worker.js", self.service_worker_handler)
-        self.app.router.add_get("/tunnel_service_worker.js", self.tunnel_service_worker_handler)
+        self.app.router.add_get("/unified_service_worker.js", self.unified_service_worker_handler)
 
         # 静态文件
         static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -124,10 +123,10 @@ class PortServer:
         restored_path = urllib.parse.quote(match_path, safe='')
         return web.json_response({"path": restored_path})
 
-    async def service_worker_handler(self, request):
-        """提供 Service Worker 脚本 - 直接返回静态文件"""
+    async def unified_service_worker_handler(self, request):
+        """提供统一的Service Worker脚本"""
         try:
-            sw_file = os.path.join(os.path.dirname(__file__), "subpath_service_worker.js")
+            sw_file = os.path.join(os.path.dirname(__file__), "unified_service_worker.js")
             with open(sw_file, "r", encoding="utf-8") as f:
                 content = f.read()
             
@@ -140,25 +139,7 @@ class PortServer:
                 }
             )
         except FileNotFoundError:
-            return web.Response(text="Service Worker 脚本未找到", status=404)
-
-    async def tunnel_service_worker_handler(self, request):
-        """提供隧道Service Worker脚本"""
-        try:
-            sw_file = os.path.join(os.path.dirname(__file__), "tunnel_service_worker.js")
-            with open(sw_file, "r", encoding="utf-8") as f:
-                content = f.read()
-            
-            return web.Response(
-                text=content,
-                content_type="application/javascript",
-                headers={
-                    "Service-Worker-Allowed": "/",
-                    "Cache-Control": "no-cache"
-                }
-            )
-        except FileNotFoundError:
-            return web.Response(text="隧道Service Worker脚本未找到", status=404)
+            return web.Response(text="统一Service Worker脚本未找到", status=404)
 
     async def http_tunnel_handler(self, request):
         """HTTP隧道处理器 - 完整转发HTTP请求"""
