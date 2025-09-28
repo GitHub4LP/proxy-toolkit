@@ -3,7 +3,6 @@ class PortApp {
     constructor() {
         this.basePath = window.location.pathname.replace(/\/$/, '');
         this.serviceWorkerStates = new Map(); // Store Service Worker states for each port
-        this.portDecodeDepths = new Map(); // Store decode depth settings for each port
         this.portStrategies = new Map(); // Store strategy selection for each port (subpath/tunnel)
         this.addPortTimeout = null; // Debounce timer
         this.nginxDecodeDepth = 0; // nginx decode depth
@@ -439,7 +438,7 @@ class PortApp {
             
             this.displayPorts(ports);
         } catch (error) {
-            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="8" class="error">Failed to get port list</td></tr>';
+            document.getElementById('portTableBody').innerHTML = '<tr><td colspan="6" class="error">Failed to get port list</td></tr>';
         }
     }
 
@@ -453,7 +452,7 @@ class PortApp {
         const allPorts = this.mergePortData(ports);
         
         if (allPorts.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="8" class="no-ports">No port data</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6" class="no-ports">No port data</td></tr>';
             return;
         }
 
@@ -532,7 +531,6 @@ class PortApp {
                 <td class="port-cell">${port.port}</td>
                 <td class="url-cell proxy-column">${urlCell}</td>
                 <td class="process-cell">${processInfo}</td>
-                <td class="decode-depth-cell proxy-column">${swControls.decodeDepth}</td>
                 <td class="sw-cell proxy-column">${swControls.swIcon}</td>
                 <td class="strategy-cell proxy-column">${swControls.strategy}</td>
             </tr>
@@ -540,17 +538,6 @@ class PortApp {
     }
 
     renderServiceWorkerControls(port) {
-        // 解码深度输入框
-        if (!this.portDecodeDepths.has(port.port)) {
-            this.portDecodeDepths.set(port.port, this.nginxDecodeDepth);
-        }
-        const currentDecodeDepth = this.portDecodeDepths.get(port.port);
-        const decodeDepthInput = this.swEnabled && port.proxy_url ? 
-            `<input type="number" class="decode-depth-input" value="${currentDecodeDepth}" min="0" max="10" 
-             onchange="app.updatePortDecodeDepth(${port.port}, this.value)" 
-             title="nginx decode depth (default: ${this.nginxDecodeDepth})">` :
-            '<span class="decode-depth-disabled">N/A</span>';
-        
         // Service Worker 补丁图标
         const swState = this.serviceWorkerStates.get(port.port) || { registered: false, loading: false };
         const swIcon = this.swEnabled && port.proxy_url ? 
@@ -567,7 +554,6 @@ class PortApp {
             '<span class="strategy-disabled">N/A</span>';
         
         return {
-            decodeDepth: decodeDepthInput,
             swIcon: swIcon,
             strategy: strategySelect
         };
@@ -711,10 +697,9 @@ class PortApp {
             if (currentStrategy === 'tunnel') {
                 mode = 't';
             } else {
-                const portDecodeDepth = this.portDecodeDepths.get(port) ?? this.nginxDecodeDepth;
                 const loopStrategy = 'url_param'; // 默认使用url_param策略
                 const loopChar = loopStrategy === 'memory_set' ? 'm' : 'u';
-                mode = `s${portDecodeDepth}${loopChar}`;
+                mode = `s${this.nginxDecodeDepth}${loopChar}`;
             }
             
             const swScriptPath = `${this.basePath}/unified_service_worker.js?mode=${mode}`;
@@ -778,27 +763,7 @@ class PortApp {
         }
     }
 
-    updatePortDecodeDepth(port, value) {
-        // 更新端口的解码深度设置
-        const decodeDepth = parseInt(value);
-        if (isNaN(decodeDepth) || decodeDepth < 0) {
-            // 如果输入无效，恢复为该端口当前设置的值
-            const input = document.querySelector(`input[onchange*="${port}"]`);
-            if (input) {
-                input.value = this.portDecodeDepths.get(port);
-            }
-            return;
-        }
-        
-        // 保存设置
-        this.portDecodeDepths.set(port, decodeDepth);
-        
-        // 如果该端口已注册Service Worker，提示需要重新注册
-        const swState = this.serviceWorkerStates.get(port);
-        if (swState && swState.registered) {
 
-        }
-    }
 
     // ==================== 策略管理方法 ====================
     
