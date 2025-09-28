@@ -62,6 +62,7 @@ class PortServer:
         self.app.router.add_get("/", self.index_handler)
         self.app.router.add_get("/api/ports", self.list_ports_handler)
         self.app.router.add_get("/api/port/{port}", self.port_info_handler)
+        self.app.router.add_get("/api/url-template", self.url_template_handler)
         self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
         # HTTP隧道处理
         self.app.router.add_post("/api/http-tunnel", self.http_tunnel_handler)
@@ -109,6 +110,13 @@ class PortServer:
         self._update_port_info(port_info)
         return web.json_response(port_info.to_dict())
 
+    async def url_template_handler(self, request):
+        """获取当前环境的URL模板"""
+        template = detect_service_config()
+        return web.json_response({
+            "template": template,
+            "has_proxy_support": bool(template)
+        })
 
     async def test_encoding_handler(self, request):
         """nginx解码深度检测端点 - 返回nginx解码后的路径"""

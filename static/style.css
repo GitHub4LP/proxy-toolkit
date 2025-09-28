@@ -249,6 +249,24 @@ body {
     to { transform: rotate(360deg); }
 }
 
+/* 代理支持相关样式 */
+.no-proxy {
+    color: #999;
+    font-style: italic;
+    font-size: 12px;
+}
+
+.proxy-unavailable-notice {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    color: #856404;
+    padding: 10px 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    text-align: center;
+    font-size: 14px;
+}
+
 .btn {
     padding: 8px 16px;
     margin: 0 5px;
