@@ -813,7 +813,8 @@ class PortApp {
         
         if (!proxyUrl) return;
         
-        let targetScope = proxyUrl;
+        // 统一转换为路径格式进行匹配
+        let targetScope = this.normalizeUrl(proxyUrl);
         if (!targetScope.endsWith('/')) {
             targetScope += '/';
         }
@@ -829,7 +830,7 @@ class PortApp {
         
         if (targetRegistration) {
             try {
-                console.log(`[SW注销] 端口 ${port} 尝试直接注销`);
+                console.log(`[SW注销] 端口 ${port} 尝试注销，目标scope: ${targetScope}`);
                 await targetRegistration.unregister();
                 if (targetRegistration.active) {
                     console.log(`[SW注销] 端口 ${port} 发送强制刷新消息`);
@@ -837,9 +838,12 @@ class PortApp {
                         type: 'FORCE_NAVIGATE_ALL_CLIENTS'
                     });
                 }
+                console.log(`[SW注销] 端口 ${port} 注销成功`);
             } catch (error) {
                 console.warn(`[SW注销] 端口 ${port} 注销异常:`, error);
             }
+        } else {
+            console.warn(`[SW注销] 端口 ${port} 未找到匹配的Service Worker，目标scope: ${targetScope}`);
         }
         
         // 清理状态
