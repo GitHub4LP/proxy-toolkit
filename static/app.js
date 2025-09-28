@@ -71,8 +71,8 @@ class PortApp {
     }
 
     compileTemplateRegex(template) {
-        // 先提取模板的路径部分，确保与scope格式一致
-        const templatePath = this.normalizeUrl(template);
+        // 手动提取模板路径，避免URL构造函数对占位符的副作用
+        const templatePath = this.extractTemplatePathManually(template);
         
         // 转义正则特殊字符
         const escaped = templatePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -81,6 +81,16 @@ class PortApp {
         
         console.log(`[正则编译] 模板路径: ${templatePath} -> 正则: ${pattern}`);
         return new RegExp(pattern);
+    }
+
+    extractTemplatePathManually(template) {
+        // 手动提取路径部分，不使用 new URL() 避免对占位符的编码处理
+        if (template.startsWith('http://') || template.startsWith('https://')) {
+            const protocolEnd = template.indexOf('://') + 3;
+            const hostEnd = template.indexOf('/', protocolEnd);
+            return hostEnd !== -1 ? template.substring(hostEnd) : '/';
+        }
+        return template.startsWith('/') ? template : '/' + template;
     }
 
     normalizeUrl(url) {
