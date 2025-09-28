@@ -71,10 +71,15 @@ class PortApp {
     }
 
     compileTemplateRegex(template) {
+        // 先提取模板的路径部分，确保与scope格式一致
+        const templatePath = this.normalizeUrl(template);
+        
         // 转义正则特殊字符
-        const escaped = template.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const escaped = templatePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         // 将{{port}}替换为数字捕获组
         const pattern = escaped.replace('\\{\\{port\\}\\}', '(\\d+)');
+        
+        console.log(`[正则编译] 模板路径: ${templatePath} -> 正则: ${pattern}`);
         return new RegExp(pattern);
     }
 
@@ -343,8 +348,8 @@ class PortApp {
             return port;
         }
         
-        // 对于无法匹配的scope，不输出警告，因为可能是其他环境的Service Worker
-        console.log(`[端口提取] scope不匹配当前模板，忽略: ${normalizedScope}`);
+        // 对于无法匹配的scope，输出调试信息
+        console.log(`[端口提取] scope不匹配模板，忽略: ${normalizedScope} (模板正则: ${this.templateRegex})`);
         return null;
     }
 
