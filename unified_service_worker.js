@@ -1,20 +1,14 @@
 // 统一Service Worker - 支持子路径修复和HTTP隧道两种策略
 // 参数格式: mode=<strategy><depth><loop>
-// - strategy: s=subpath, t=tunnel
-// - depth: 0-9直接数字 (仅subpath需要)
-// - loop: u=url_param, m=memory_set (仅subpath需要)
 // 示例: mode=s2u (subpath, decode_depth=2, url_param), mode=t (tunnel)
 
-// ==================== 配置解析 ====================
 const scriptUrl = new URL(self.location.href);
 const mode = scriptUrl.searchParams.get('mode') || 's0u';
 const scope = new URL(self.registration.scope).pathname;
 
 let strategy, decodeDepth = 0, loopStrategy = 'url_param';
 
-// 解析紧凑编码参数
 if (mode.startsWith('s')) {
-    // Subpath策略
     strategy = 'subpath';
     
     if (mode.length >= 2) {
@@ -27,10 +21,8 @@ if (mode.startsWith('s')) {
         loopStrategy = loopChar === 'm' ? 'memory_set' : 'url_param';
     }
 } else if (mode.startsWith('t')) {
-    // Tunnel策略
     strategy = 'tunnel';
 } else {
-    // 默认策略
     strategy = 'subpath';
 }
 
@@ -104,10 +96,7 @@ function copyProperties(source, target, properties) {
     }
 }
 
-// ==================== Subpath策略处理器 ====================
-
 const SubpathHandler = {
-    // 循环检测策略
     LoopStrategies: {
         url_param: {
             isProcessed(url) {
@@ -171,13 +160,11 @@ const SubpathHandler = {
         let finalPathname = url.pathname;
         let needsProcessing = false;
         
-        // nginx解码深度处理
         if (decodeDepth > 0 && hasEncodedChars(finalPathname)) {
             finalPathname = selectiveMultiEncodePath(finalPathname);
             needsProcessing = true;
         }
         
-        // 子路径补全处理
         const commonPath = longestCommonPathSegments(scope, finalPathname);
         if (commonPath !== scope) {
             finalPathname = finalPathname.replace(commonPath, scope);
@@ -191,8 +178,6 @@ const SubpathHandler = {
         }
     }
 };
-
-// ==================== Tunnel策略处理器 ====================
 
 const TunnelHandler = {
     handleFetch(event) {
@@ -306,10 +291,28 @@ const TunnelHandler = {
     }
 };
 
-// ==================== 事件监听器 ====================
+let NAVIGATION_INTERCEPTOR_CONTENT = '';
 
 self.addEventListener('install', (event) => {
-    event.waitUntil(self.skipWaiting());
+    event.waitUntil(
+        (async () => {
+            try {
+                const interceptorUrl = new URL('./navigation_interceptor.js', scriptUrl.href).href;
+                console.log(`[SW] Loading interceptor from:`, interceptorUrl);
+                
+                const response = await fetch(interceptorUrl);
+                if (response.ok) {
+                    NAVIGATION_INTERCEPTOR_CONTENT = await response.text();
+                } else {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+            } catch (error) {
+                console.error(`[SW] Failed to load navigation interceptor:`, error);
+                throw error;
+            }
+            await self.skipWaiting();
+        })()
+    );
 });
 
 self.addEventListener('activate', (event) => {
@@ -318,13 +321,13 @@ self.addEventListener('activate', (event) => {
 
 self.addEventListener('message', (event) => {
     if (event.data && event.data.type === 'FORCE_NAVIGATE_ALL_CLIENTS') {
-        console.log(`[${strategy.toUpperCase()} SW] 收到强制刷新指令`);
+        console.log(`[SW] 收到强制刷新指令`);
         
         self.clients.matchAll({
             includeUncontrolled: false,
             type: 'window'
         }).then(clients => {
-            console.log(`[${strategy.toUpperCase()} SW] 强制刷新 ${clients.length} 个客户端`);
+            console.log(`[SW] 强制刷新 ${clients.length} 个客户端`);
             
             clients.forEach(client => {
                 client.navigate(client.url).catch(() => {});
@@ -334,11 +337,31 @@ self.addEventListener('message', (event) => {
 });
 
 self.addEventListener('fetch', event => {
-    if (event.request.mode === 'navigate') {
+    if (new URL(event.request.url).host !== self.location.host) {
         return;
     }
     
-    if (new URL(event.request.url).host !== self.location.host) {
+    if (event.request.mode === 'navigate') {
+        event.respondWith((async () => {
+            try {
+                const response = await fetch(event.request);
+                
+                if (!response.ok) {
+                    return response;
+                }
+                
+                const contentType = response.headers.get('content-type') || '';
+                if (!contentType.includes('text/html')) {
+                    return response;
+                }
+                
+                return await injectNavigationInterceptor(response, event.request);
+                
+            } catch (error) {
+                console.error(`[SW] Navigation request failed:`, error);
+                return fetch(event.request);
+            }
+        })());
         return;
     }
 
@@ -349,4 +372,46 @@ self.addEventListener('fetch', event => {
     }
 });
 
-console.log(`[${strategy.toUpperCase()} SW] Initialized with mode: ${mode}`);
+
+
+async function injectNavigationInterceptor(response, request) {
+    try {
+        const htmlText = await response.text();
+        
+        const scriptTag = `<script>
+window._NavigationInterceptorConfig = { scopeBase: '${scope}' };
+${NAVIGATION_INTERCEPTOR_CONTENT}
+</script>`;
+        
+        let modifiedHTML;
+        
+        const headMatch = htmlText.match(/<head(\s[^>]*)?>/) || htmlText.match(/<head>/);
+        if (headMatch) {
+            const insertPos = headMatch.index + headMatch[0].length;
+            modifiedHTML = htmlText.slice(0, insertPos) + scriptTag + htmlText.slice(insertPos);
+        }
+        else if (htmlText.match(/<html(\s[^>]*)?>/) || htmlText.match(/<html>/)) {
+            const htmlMatch = htmlText.match(/<html(\s[^>]*)?>/) || htmlText.match(/<html>/);
+            const insertPos = htmlMatch.index + htmlMatch[0].length;
+            const headSection = `<head>${scriptTag}</head>`;
+            modifiedHTML = htmlText.slice(0, insertPos) + headSection + htmlText.slice(insertPos);
+        }
+        else {
+            const navPath = new URL(request.url).pathname;
+            console.warn(`[SW] Invalid HTML structure, navigation interceptor not injected for: ${navPath}`);
+            return response;
+        }
+        
+        return new Response(modifiedHTML, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: response.headers
+        });
+        
+    } catch (error) {
+        console.error(`[SW] Failed to inject navigation interceptor:`, error);
+        return response;
+    }
+}
+
+console.log(`[SW] Initialized with mode: ${mode}`);
