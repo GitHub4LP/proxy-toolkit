@@ -336,7 +336,16 @@ self.addEventListener('message', (event) => {
 });
 
 self.addEventListener('fetch', event => {
-    if (new URL(event.request.url).host !== self.location.host) {
+    const urlStr = event.request.url;
+    if (!(urlStr.startsWith('http://') || urlStr.startsWith('https://'))) {
+        return;
+    }
+    try {
+        const u = new URL(urlStr);
+        if (u.origin !== self.location.origin) {
+            return;
+        }
+    } catch {
         return;
     }
     
