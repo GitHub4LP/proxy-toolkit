@@ -109,7 +109,8 @@ const SubpathHandler = {
                 return urlObj.toString();
             },
             
-            removeMark(request) {
+            removeMark(event) {
+                const request = event.request;
                 const urlObj = new URL(request.url);
                 urlObj.searchParams.delete('_sw');
                 const cleanUrl = urlObj.toString();
@@ -124,7 +125,7 @@ const SubpathHandler = {
                 }
                 
                 copyProperties(request, requestInit, requestProps);
-                return new Request(finalUrl, requestInit);
+                event.respondWith(fetch(new Request(finalUrl, requestInit)));
             }
         },
         
@@ -140,9 +141,8 @@ const SubpathHandler = {
                 return url;
             },
             
-            removeMark(request) {
-                this._cache.delete(request.url);
-                return request;
+            removeMark(event) {
+                this._cache.delete(event.request.url);
             }
         }
     },
@@ -152,8 +152,7 @@ const SubpathHandler = {
         const strategy = this.LoopStrategies[loopStrategy];
 
         if (strategy.isProcessed(event.request.url)) {
-            const cleanRequest = strategy.removeMark(event.request);
-            event.respondWith(fetch(cleanRequest));
+            strategy.removeMark(event);
             return;
         }
 
