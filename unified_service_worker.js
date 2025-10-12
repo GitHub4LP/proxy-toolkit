@@ -3,10 +3,10 @@
 // 示例: mode=s2u (subpath, decode_depth=2, url_param), mode=t (tunnel)
 
 const scriptUrl = new URL(self.location.href);
-const mode = scriptUrl.searchParams.get('mode') || 's0u';
+const mode = scriptUrl.searchParams.get('mode') || 's0';
 const scope = new URL(self.registration.scope).pathname;
 
-let strategy, decodeDepth = 0, loopStrategy = 'url_param';
+let strategy, decodeDepth = 0;
 
 if (mode.startsWith('s')) {
     strategy = 'subpath';
@@ -16,17 +16,14 @@ if (mode.startsWith('s')) {
         decodeDepth = parseInt(depthChar) || 0;
     }
     
-    if (mode.length >= 3) {
-        const loopChar = mode[2];
-        loopStrategy = loopChar === 'm' ? 'memory_set' : 'url_param';
-    }
+
 } else if (mode.startsWith('t')) {
     strategy = 'tunnel';
 } else {
     strategy = 'subpath';
 }
 
-console.log(`[SW] Mode: ${mode}, Strategy: ${strategy}, Depth: ${decodeDepth}, Loop: ${loopStrategy}`);
+console.log(`[SW] Mode: ${mode}, Strategy: ${strategy}, Depth: ${decodeDepth}`);
 
 // ==================== 通用工具函数 ====================
 
@@ -97,62 +94,14 @@ function copyProperties(source, target, properties) {
 }
 
 const SubpathHandler = {
-    LoopStrategies: {
-        url_param: {
-            isProcessed(url) {
-                return new URL(url).searchParams.has('_sw');
-            },
-            
-            addMark(url) {
-                const urlObj = new URL(url);
-                urlObj.searchParams.set('_sw', '');
-                return urlObj.toString();
-            },
-            
-            removeMark(event) {
-                const request = event.request;
-                const urlObj = new URL(request.url);
-                urlObj.searchParams.delete('_sw');
-                const cleanUrl = urlObj.toString();
-                const finalUrl = cleanUrl.endsWith('?') ? cleanUrl.slice(0, -1) : cleanUrl;
-                
-                const requestProps = ['method', 'headers', 'mode', 'credentials', 'cache', 'redirect', 'referrer', 'referrerPolicy', 'integrity', 'keepalive'];
-                const requestInit = {};
-                
-                if (request.body) {
-                    requestInit.body = request.body;
-                    requestInit.duplex = 'half';
-                }
-                
-                copyProperties(request, requestInit, requestProps);
-                event.respondWith(fetch(new Request(finalUrl, requestInit)));
-            }
-        },
-        
-        memory_set: {
-            _cache: new Set(),
-            
-            isProcessed(url) {
-                return this._cache.has(url);
-            },
-            
-            addMark(url) {
-                this._cache.add(url);
-                return url;
-            },
-            
-            removeMark(event) {
-                this._cache.delete(event.request.url);
-            }
-        }
-    },
+    _cache: new Set(),
 
     handleFetch(event) {
         const url = new URL(event.request.url);
-        const strategy = this.LoopStrategies[loopStrategy];
+        const cache = this._cache;
 
-        if (strategy.isProcessed(event.request.url)) {
-            strategy.removeMark(event);
+        if (cache.has(event.request.url)) {
+            cache.delete(event.request.url);
             return;
         }
 
@@ -172,8 +121,8 @@ const SubpathHandler = {
         
         if (needsProcessing) {
             url.pathname = finalPathname;
-            const markedUrl = strategy.addMark(url.href);
-            event.respondWith(Response.redirect(markedUrl, 307));
+            this._cache.add(url.href);
+            event.respondWith(Response.redirect(url.href, 307));
         }
     }
 };
@@ -340,12 +289,7 @@ self.addEventListener('fetch', event => {
     if (!(urlStr.startsWith('http://') || urlStr.startsWith('https://'))) {
         return;
     }
-    try {
-        const u = new URL(urlStr);
-        if (u.origin !== self.location.origin) {
-            return;
-        }
-    } catch {
+    if (new URL(urlStr).origin !== self.location.origin) {
         return;
     }
     

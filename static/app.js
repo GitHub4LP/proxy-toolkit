@@ -552,8 +552,7 @@ class PortApp {
         return `
             <div class="sw-mode-group">
                 <label><input type="radio" name="sw-mode-${port.port}" value="none" ${currentMode === 'none' ? 'checked' : ''} onchange="app.switchPortMode(${port.port}, 'none')"> 无</label>
-                <label><input type="radio" name="sw-mode-${port.port}" value="subpath_url" ${currentMode === 'subpath_url' ? 'checked' : ''} onchange="app.switchPortMode(${port.port}, 'subpath_url')"> subpath[url_param]</label>
-                <label><input type="radio" name="sw-mode-${port.port}" value="subpath_mem" ${currentMode === 'subpath_mem' ? 'checked' : ''} onchange="app.switchPortMode(${port.port}, 'subpath_mem')"> subpath[memory_set]</label>
+                <label><input type="radio" name="sw-mode-${port.port}" value="subpath" ${currentMode === 'subpath' ? 'checked' : ''} onchange="app.switchPortMode(${port.port}, 'subpath')"> subpath</label>
                 <label><input type="radio" name="sw-mode-${port.port}" value="tunnel" ${currentMode === 'tunnel' ? 'checked' : ''} onchange="app.switchPortMode(${port.port}, 'tunnel')"> tunnel</label>
             </div>
         `;
@@ -673,11 +672,10 @@ class PortApp {
             
             if (currentMode === 'tunnel') {
                 mode = 't';
-            } else if (currentMode === 'subpath_mem') {
-                mode = `s${this.nginxDecodeDepth}m`;
+            } else if (currentMode === 'subpath') {
+                mode = `s${this.nginxDecodeDepth}`;
             } else {
-                // subpath_url 或其他情况，默认使用 url_param
-                mode = `s${this.nginxDecodeDepth}u`;
+                throw new Error('Invalid mode: ' + currentMode);
             }
             
             const swScriptPath = `${this.basePath}/unified_service_worker.js?mode=${mode}`;
@@ -750,14 +748,11 @@ class PortApp {
 
     
     getPortMode(port) {
-        // 检查是否有注册的Service Worker
         const swState = this.serviceWorkerStates.get(port);
         if (!swState || !swState.registered) {
             return 'none';
         }
-        
-        // 从保存的策略中获取模式
-        const strategy = this.portStrategies.get(port) || 'subpath_url';
+        const strategy = this.getPortStrategy(port);
         return strategy;
     }
     
@@ -892,10 +887,8 @@ class PortApp {
     }
 
     getPortStrategy(port) {
-        const mode = this.portStrategies.get(port) || 'subpath_url';
-        // 兼容旧的策略名称
-        if (mode === 'subpath') return 'subpath_url';
-        return mode;
+        const mode = this.portStrategies.get(port);
+        return mode || 'subpath';
     }
     
     savePortStrategies() {
