@@ -64,8 +64,8 @@ class PortServer:
         self.app.router.add_get("/api/port/{port}", self.port_info_handler)
         self.app.router.add_get("/api/url-template", self.url_template_handler)
         self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
-        # HTTP隧道处理
-        self.app.router.add_post("/api/http-tunnel", self.http_tunnel_handler)
+        # 路径模式隧道（保持方法与体，端口在路径，余路径在参数 u）
+        self.app.router.add_route("*", "/api/http-tunnel/{port:\\d+}", self.http_tunnel_handler)
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/unified_service_worker.js", self.unified_service_worker_handler)
         self.app.router.add_get("/navigation_interceptor.js", self.navigation_interceptor_handler)
@@ -160,74 +160,88 @@ class PortServer:
         except FileNotFoundError:
             return web.Response(text="导航拦截器脚本未找到", status=404)
 
+
+
     async def http_tunnel_handler(self, request):
-        """HTTP隧道处理器 - 完整转发HTTP请求"""
+        """HTTP隧道处理器（路径模式） - 保持方法与体，端口在路径，目标余路径在参数u"""
         try:
-            # 解析隧道请求
-            tunnel_data = await request.json()
-            
-            # 提取原始请求信息
-            target_url = tunnel_data.get('url')
-            method = tunnel_data.get('method', 'GET')
-            headers = tunnel_data.get('headers', {})
-            body_data = tunnel_data.get('body')
-            
-            if not target_url:
-                return web.json_response({'error': '缺少目标URL'}, status=400)
-            
-            # 重构请求体
-            body = None
-            if body_data:
-                try:
-                    body = bytes(body_data)
-                except (TypeError, ValueError) as e:
-                    return web.json_response({'error': f'请求体格式错误: {e}'}, status=400)
-            
-            # 清理可能导致问题的头信息
-            clean_headers = {}
+            port_str = request.match_info.get('port', '')
+            try:
+                port = int(port_str)
+                if port <= 0 or port > 65535:
+                    return web.Response(text="无效端口", status=400)
+            except ValueError:
+                return web.Response(text="端口解析失败", status=400)
+
+            u = request.query.get('u', '')
+            if not u or not u.startswith('/'):
+                return web.Response(text="缺少或非法参数u", status=400)
+
+            target_url = f"http://localhost:{port}{u}"
+
+            import aiohttp
+            timeout = aiohttp.ClientTimeout(total=30)
+
+            # 过滤可能导致问题的头
             skip_headers = {
                 'host', 'content-length', 'connection', 'upgrade',
-                'proxy-connection', 'proxy-authorization'
+                'proxy-connection', 'proxy-authorization', 'transfer-encoding'
             }
-            
-            for key, value in headers.items():
-                if key.lower() not in skip_headers:
-                    clean_headers[key] = value
-            
-            # 使用aiohttp转发请求
-            import aiohttp
-            timeout = aiohttp.ClientTimeout(total=30)  # 30秒超时
-            
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            clean_headers = {
+                k: v for k, v in request.headers.items()
+                if k.lower() not in skip_headers
+                and not k.lower().startswith(('x-forwarded-', 'x-proxy'))
+            }
+            # 重写来源相关头为目标源，满足常见CSRF/同源校验
+            target_origin = f"http://localhost:{port}"
+            clean_headers['Origin'] = target_origin
+            clean_headers['Referer'] = target_origin + '/'
+
+            body = None
+            if request.can_read_body:
+                try:
+                    body = await request.read()
+                except Exception:
+                    body = None
+
+
+
+            async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
                 try:
                     async with session.request(
-                        method=method,
+                        method=request.method,
                         url=target_url,
                         headers=clean_headers,
                         data=body,
-                        allow_redirects=False  # 保持重定向控制
-                    ) as response:
-                        # 读取响应体
-                        response_body = await response.read()
-                        
-                        # 构造响应数据
-                        response_data = {
-                            'status': response.status,
-                            'statusText': response.reason or '',
-                            'headers': dict(response.headers),
-                            'body': list(response_body) if response_body else None
-                        }
-                        
-                        return web.json_response(response_data)
-                        
+                        allow_redirects=False
+                    ) as upstream:
+                        # 过滤响应中的 hop-by-hop 和长度相关头，由服务器按实际写入决定
+                        resp_headers = dict(upstream.headers)
+                        for hk in ('transfer-encoding', 'connection', 'content-length'):
+                            resp_headers.pop(hk, None)
+
+
+
+                        # 流式透传上游响应
+                        stream_resp = web.StreamResponse(
+                            status=upstream.status,
+                            reason=upstream.reason or ''
+                        )
+                        for k, v in resp_headers.items():
+                            stream_resp.headers[k] = v
+                        await stream_resp.prepare(request)
+                        async for chunk in upstream.content.iter_chunked(65536):
+                            await stream_resp.write(chunk)
+                        await stream_resp.write_eof()
+                        return stream_resp
                 except aiohttp.ClientError as e:
-                    return web.json_response({'error': f'请求转发失败: {e}'}, status=502)
+                    return web.Response(text=f"请求转发失败: {e}", status=502)
                 except asyncio.TimeoutError:
-                    return web.json_response({'error': '请求超时'}, status=504)
-                    
+                    return web.Response(text="请求超时", status=504)
+
         except Exception as e:
-            print(f"[隧道错误] {e}")
-            return web.json_response({'error': f'隧道处理异常: {e}'}, status=500)
+            print(f"[路径隧道错误] {e}")
+            return web.Response(text=f"隧道处理异常: {e}", status=500)
 
     def _update_port_info(self, port_info: PortInfo):
         """更新端口信息"""

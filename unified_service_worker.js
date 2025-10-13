@@ -1,6 +1,4 @@
-// 统一Service Worker - 支持子路径修复和HTTP隧道两种策略
-// 参数格式: mode=<strategy><depth><loop>
-// 示例: mode=s2u (subpath, decode_depth=2, url_param), mode=t (tunnel)
+// Service Worker: subpath 修复与 tunnel 透传（mode=s<depth> | t）
 
 const scriptUrl = new URL(self.location.href);
 const mode = scriptUrl.searchParams.get('mode') || 's0';
@@ -25,7 +23,7 @@ if (mode.startsWith('s')) {
 
 console.log(`[SW] Mode: ${mode}, Strategy: ${strategy}, Depth: ${decodeDepth}`);
 
-// ==================== 通用工具函数 ====================
+// 工具函数
 
 function hasEncodedChars(str) {
     return /%[0-9A-Fa-f]{2}/.test(str);
@@ -130,114 +128,97 @@ const SubpathHandler = {
 const TunnelHandler = {
     handleFetch(event) {
         const url = new URL(event.request.url);
-        const scriptPath = scriptUrl.pathname.replace('/unified_service_worker.js', '');
-        const API_URL = scriptUrl.origin + scriptPath + '/api/http-tunnel';
-        
-        if (url.href === API_URL || url.pathname.endsWith('/api/http-tunnel')) {
+
+        // 跳过自身 API
+        if (url.pathname.endsWith('/api/http-tunnel') || url.pathname.includes('/api/http-tunnel/')) {
             return;
         }
-        
+
+        // 判断是否需要处理（子路径不完整或包含编码字符）
         const pathname = url.pathname;
         const commonPath = longestCommonPathSegments(scope, pathname);
         const pathIncomplete = commonPath !== scope;
-        
+
         if (!pathIncomplete && !hasEncodedChars(pathname)) {
             return;
         }
+
+        // 仅在需要时再计算脚本与作用域分段
+        const scriptPath = scriptUrl.pathname.replace('/unified_service_worker.js', '');
         const scriptParts = scriptPath.split('/').filter(p => p !== '');
         const scopeParts = scope.split('/').filter(p => p !== '');
-        
+
+        // 校验脚本路径与作用域结构一致
         if (scriptParts.length !== scopeParts.length) {
             console.error('[Tunnel SW] 路径结构不匹配');
             return;
         }
-        
+
+        // 找出 scope 与 scriptPath 的差异段，应该只有端口号
         let differenceIndex = -1;
         let differenceCount = 0;
-        
         for (let i = 0; i < scriptParts.length; i++) {
             if (scriptParts[i] !== scopeParts[i]) {
                 differenceIndex = i;
                 differenceCount++;
             }
         }
-        
         if (differenceCount !== 1) {
             console.error(`[Tunnel SW] 预期只有一个差异，实际发现${differenceCount}个`);
             return;
         }
-        
+
         const port = parseInt(scopeParts[differenceIndex]);
-        
         if (isNaN(port) || port <= 0 || port > 65535) {
             console.error('[Tunnel SW] 差异不是有效的端口号');
             return;
         }
-        
-        let targetPath = pathIncomplete ? pathname.replace(commonPath, scope) : pathname;
-        
+
+        // 计算目标路径：补全子路径不完整后，裁剪掉 scope 前缀得到余路径
+        let finalPath = pathIncomplete ? pathname.replace(commonPath, scope) : pathname;
+
+        let remainder;
         if (scope.endsWith('/')) {
-            targetPath = targetPath.substring(scope.length - 1);
+            remainder = finalPath.substring(scope.length - 1);
         } else {
-            targetPath = targetPath.substring(scope.length);
-            if (!targetPath.startsWith('/')) {
-                targetPath = '/' + targetPath;
+            remainder = finalPath.substring(scope.length);
+            if (!remainder.startsWith('/')) {
+                remainder = '/' + remainder;
             }
         }
-        
-        const targetUrl = `http://localhost:${port}${targetPath}${url.search}${url.hash}`;
-        const optionalProps = ['mode', 'credentials', 'cache', 'redirect', 'referrer', 'referrerPolicy', 'integrity', 'keepalive'];
-        
-        const packedRequest = {
+
+        // 构造路径隧道 URL（暂不考虑 nginx 对参数的解码）
+        const apiBase = scriptUrl.origin + scriptPath + `/api/http-tunnel/${port}`;
+        const uParam = encodeURIComponent(remainder + url.search);
+        const proxyUrl = `${apiBase}?u=${uParam}`;
+
+        const optionalProps = ['credentials', 'cache', 'redirect', 'referrer', 'referrerPolicy', 'integrity', 'keepalive'];
+        const init = {
             method: event.request.method,
-            url: targetUrl,
-            headers: Object.fromEntries(event.request.headers.entries())
+            headers: new Headers(event.request.headers)
         };
-        
-        copyProperties(event.request, packedRequest, optionalProps);
-        
+        copyProperties(event.request, init, optionalProps);
+
         event.respondWith((async () => {
-            if (event.request.body) {
-                try {
-                    const arrayBuffer = await event.request.arrayBuffer();
-                    packedRequest.body = Array.from(new Uint8Array(arrayBuffer));
-                } catch (error) {
-                    console.warn('[Tunnel SW] 请求体读取失败:', error);
-                }
-            }
-            
             try {
-                const tunnelResponse = await fetch(API_URL, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(packedRequest)
-                });
-                
-                if (!tunnelResponse.ok) {
-                    throw new Error(`隧道请求失败: ${tunnelResponse.status} ${tunnelResponse.statusText}`);
+                if (event.request.body && event.request.method !== 'GET' && event.request.method !== 'HEAD') {
+                    try {
+                        const arrayBuffer = await event.request.arrayBuffer();
+                        init.body = arrayBuffer;
+                    } catch (error) {
+                        console.warn('[Tunnel SW] 请求体读取失败:', error);
+                    }
                 }
-                
-                const responseData = await tunnelResponse.json();
-                
-                if (responseData.error) {
-                    throw new Error(`隧道处理错误: ${responseData.error}`);
-                }
-                
-                const responseBody = responseData.body ? new Uint8Array(responseData.body).buffer : null;
-                
-                return new Response(responseBody, {
-                    status: responseData.status,
-                    statusText: responseData.statusText,
-                    headers: new Headers(responseData.headers)
-                });
-                
+                return await fetch(proxyUrl, init);
             } catch (error) {
-                console.error('[Tunnel SW] 隧道请求失败:', error);
+                console.error('[Tunnel SW] 隧道请求失败，回退原始请求:', error);
                 return fetch(event.request);
             }
         })());
     }
 };
+
+/* removed legacy JSON tunnel handler */
 
 let NAVIGATION_INTERCEPTOR_CONTENT = '';
 
