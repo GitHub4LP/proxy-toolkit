@@ -1,284 +1,134 @@
 /**
- * 导航拦截器 - 修正子路径环境下的导航问题
- * 使用: NavigationInterceptor.init({ scopeBase: '/user/xxx/proxy/8080/' });
+ * 导航拦截器（纯函数闭包版）- 子路径环境下的导航修复
+ * 由 Service Worker 注入到 HTML：先设置 window._NavigationInterceptorConfig = { scopeBase: '...' }，后加载本脚本
+ * 行为：加载即执行，读取 scopeBase，安装 click/history/window.open/form 四类拦截器
  */
 
-(function(global) {
-    'use strict';
+(function (global) {
+  'use strict';
 
-    // 防止重复安装
-    if (global._NavigationInterceptorInstalled) {
-        console.warn('[Navigation Interceptor] Already installed, skipping');
-        return;
-    }
+  function reportChange(type, original, modified, extra) {
+    try {
+      if (original === modified) return;
+      var payload = { type: type, original: original, modified: modified };
+      if (extra && typeof extra === 'object') {
+        for (var k in extra) { try { payload[k] = extra[k]; } catch(_){} }
+      }
+      console.log('[NavFix]', payload);
+    } catch (_) {}
+  }
 
-    const NavigationInterceptor = {
-        config: {
-            scopeBase: '',
-            enableClickInterception: true,
-            enableLocationInterception: true,
-            enableHistoryInterception: true,
-            enableWindowOpenInterception: true,
-            enableFormInterception: true
-        },
-        originalMethods: {},
-        initialized: false,
+  // 读取配置（由 SW 注入）；缺失则安全退出
+  var cfg = global._NavigationInterceptorConfig;
+  if (!cfg || !cfg.scopeBase) {
+    return;
+  }
 
-        /** 初始化 */
-        init: function(options) {
-            if (this.initialized) {
-                this.log('Already initialized');
-                return;
-            }
+  var scopeBase = normalizeScopeBase(cfg.scopeBase);
 
-            this.config = Object.assign({}, this.config, options);
+  // 捕获原方法引用（无需卸载）
+  var originalPushState = history.pushState.bind(history);
+  var originalReplaceState = history.replaceState.bind(history);
+  var originalOpen = global.open.bind(global);
 
-            if (!this.config.scopeBase) {
-                console.error('[Navigation Interceptor] scopeBase is required');
-                return;
-            }
+  // 规范化 scopeBase：确保以 "/" 开头、以 "/" 结尾
+  function normalizeScopeBase(s) {
+    if (!s.startsWith('/')) s = '/' + s;
+    if (!s.endsWith('/')) s = s + '/';
+    return s;
+  }
 
-            this.config.scopeBase = this.normalizeScopeBase(this.config.scopeBase);
-            this.log('Initializing with config:', this.config);
+  // 是否需要对子路径进行修复：仅处理以 "/" 开头的同源根路径
+  function needsPathFix(url) {
+    if (!url || typeof url !== 'string') return false;
+    if (url.startsWith('http://') || url.startsWith('https://')) return false;
+    if (url.startsWith('//')) return false;
+    if (url.startsWith('mailto:') || url.startsWith('tel:') || url.startsWith('javascript:')) return false;
+    if (url.startsWith('#') || url.startsWith('?')) return false;
+    if (url.startsWith('data:') || url.startsWith('blob:')) return false;
+    if (url.startsWith(scopeBase)) return false;
+    return url.startsWith('/');
+  }
 
-            this.saveOriginalMethods();
-            this.installInterceptors();
+  // 修复路径：将以 "/" 开头的同源根路径前缀到 scopeBase
+  function fixPath(url) {
+    if (!needsPathFix(url)) return url;
+    var relativePath = url.substring(1);
+    return scopeBase + relativePath;
+  }
 
-            this.initialized = true;
-            global._NavigationInterceptorInstalled = true;
+  // 安装四类拦截器
+  function installInterceptors() {
+    // 1) 链接点击拦截
+    document.addEventListener('click', function (event) {
+      try {
+        var link = event.target && event.target.closest ? event.target.closest('a[href]') : null;
+        if (!link) return;
 
-            let locationStatus = false;
-            if (this.config.enableLocationInterception) {
-                try {
-                    const hrefDesc = Object.getOwnPropertyDescriptor(location, 'href');
-                    locationStatus = !!(hrefDesc && hrefDesc.set && hrefDesc.configurable);
-                } catch (error) {
-                    locationStatus = false;
-                }
-            }
-            
-            this.log(`Click: ${this.config.enableClickInterception} | Location: ${locationStatus} | History: ${this.config.enableHistoryInterception} | Window: ${this.config.enableWindowOpenInterception} | Form: ${this.config.enableFormInterception}`);
-        },
+        var href = link.getAttribute('href');
+        if (!needsPathFix(href)) return;
 
-        normalizeScopeBase: function(scopeBase) {
-            if (!scopeBase.startsWith('/')) {
-                scopeBase = '/' + scopeBase;
-            }
-            if (!scopeBase.endsWith('/')) {
-                scopeBase = scopeBase + '/';
-            }
-            return scopeBase;
-        },
+        event.preventDefault();
+        event.stopPropagation();
 
-        saveOriginalMethods: function() {
-            try {
-                this.originalMethods.pushState = history.pushState.bind(history);
-                this.originalMethods.replaceState = history.replaceState.bind(history);
-                this.originalMethods.windowOpen = global.open.bind(global);
-            } catch (error) {
-                console.error('[Navigation Interceptor] Failed to save original methods:', error);
-            }
-        },
-
-        installInterceptors: function() {
-            if (this.config.enableClickInterception) {
-                this.installClickInterceptor();
-            }
-
-            if (this.config.enableLocationInterception) {
-                this.installLocationInterceptor();
-            }
-
-            if (this.config.enableHistoryInterception) {
-                this.installHistoryInterceptor();
-            }
-
-            if (this.config.enableWindowOpenInterception) {
-                this.installWindowOpenInterceptor();
-            }
-
-            if (this.config.enableFormInterception) {
-                this.installFormInterceptor();
-            }
-        },
-
-        installClickInterceptor: function() {
-            const self = this;
-            document.addEventListener('click', function(event) {
-                try {
-                    const link = event.target.closest('a[href]');
-                    if (!link) return;
-
-                    const href = link.getAttribute('href');
-                    if (!self.needsPathFix(href)) return;
-
-                    event.preventDefault();
-                    event.stopPropagation();
-
-                    const fixedHref = self.fixPath(href);
-                    if (fixedHref !== href) {
-                        self.log('Fixed href:', href, '->', fixedHref);
-                    }
-
-                    const target = link.getAttribute('target');
-                    if (target === '_blank' || event.ctrlKey || event.metaKey) {
-                        self.originalMethods.windowOpen(fixedHref, target || '_blank');
-                    } else {
-                        global.location.href = fixedHref;
-                    }
-                } catch (error) {
-                    console.error('[Navigation Interceptor] Click handler error:', error);
-                }
-            }, true);
-        },
-
-        installLocationInterceptor: function() {
-            const self = this;
-            try {
-                const hrefDesc = Object.getOwnPropertyDescriptor(location, 'href');
-                if (hrefDesc && hrefDesc.set && hrefDesc.configurable) {
-                    const originalSetter = hrefDesc.set;
-                    Object.defineProperty(location, 'href', {
-                        get: hrefDesc.get,
-                        set: function(url) {
-                            const fixedUrl = self.fixPath(url);
-                            if (fixedUrl !== url) {
-                                self.log('Fixed location.href:', url, '->', fixedUrl);
-                            }
-                            originalSetter.call(this, fixedUrl);
-                        },
-                        configurable: true
-                    });
-                }
-            } catch (error) {}
-        },
-
-        installHistoryInterceptor: function() {
-            const self = this;
-            try {
-                history.pushState = function(state, title, url) {
-                    if (url !== undefined && url !== null) {
-                        const fixedUrl = self.fixPath(url);
-                        if (fixedUrl !== url) {
-                            self.log('Fixed pushState:', url, '->', fixedUrl);
-                        }
-                        return self.originalMethods.pushState(state, title, fixedUrl);
-                    }
-                    return self.originalMethods.pushState(state, title, url);
-                };
-
-                history.replaceState = function(state, title, url) {
-                    if (url !== undefined && url !== null) {
-                        const fixedUrl = self.fixPath(url);
-                        if (fixedUrl !== url) {
-                            self.log('Fixed replaceState:', url, '->', fixedUrl);
-                        }
-                        return self.originalMethods.replaceState(state, title, fixedUrl);
-                    }
-                    return self.originalMethods.replaceState(state, title, url);
-                };
-
-                global.addEventListener('popstate', function(event) {
-                    try {
-                        const currentPath = global.location.pathname;
-                        if (self.needsPathFix(currentPath)) {
-                            self.log('Fixing path on popstate:', currentPath);
-                            const fixedPath = self.fixPath(currentPath);
-                            self.originalMethods.replaceState(event.state, '', fixedPath + global.location.search + global.location.hash);
-                        }
-                    } catch (error) {
-                        console.error('[Navigation Interceptor] Popstate handler error:', error);
-                    }
-                });
-            } catch (error) {
-                console.error('[Navigation Interceptor] Failed to install history interceptor:', error);
-            }
-        },
-
-        installWindowOpenInterceptor: function() {
-            const self = this;
-            try {
-                global.open = function(url, target, features) {
-                    if (url !== undefined && url !== null) {
-                        const fixedUrl = self.fixPath(url);
-                        if (fixedUrl !== url) {
-                            self.log('Fixed window.open:', url, '->', fixedUrl);
-                        }
-                        return self.originalMethods.windowOpen(fixedUrl, target, features);
-                    }
-                    return self.originalMethods.windowOpen(url, target, features);
-                };
-            } catch (error) {
-                console.error('[Navigation Interceptor] Failed to install window.open interceptor:', error);
-            }
-        },
-
-        installFormInterceptor: function() {
-            const self = this;
-            document.addEventListener('submit', function(event) {
-                try {
-                    const form = event.target;
-                    if (!form || form.tagName !== 'FORM') return;
-
-                    const action = form.getAttribute('action');
-                    if (!action || !self.needsPathFix(action)) return;
-
-                    const fixedAction = self.fixPath(action);
-                    if (fixedAction !== action) {
-                        self.log('Fixed form action:', action, '->', fixedAction);
-                    }
-                    form.setAttribute('action', fixedAction);
-                } catch (error) {
-                    console.error('[Navigation Interceptor] Form submit handler error:', error);
-                }
-            }, true);
-        },
-
-        needsPathFix: function(url) {
-            if (!url || typeof url !== 'string') return false;
-            if (url.startsWith('http://') || url.startsWith('https://')) return false;
-            if (url.startsWith('//')) return false;
-            if (url.startsWith('mailto:') || url.startsWith('tel:') || url.startsWith('javascript:')) return false;
-            if (url.startsWith('#') || url.startsWith('?')) return false;
-            if (url.startsWith('data:') || url.startsWith('blob:')) return false;
-            if (url.startsWith(this.config.scopeBase)) return false;
-            return url.startsWith('/');
-        },
-
-        fixPath: function(url) {
-            if (!this.needsPathFix(url)) return url;
-            const relativePath = url.substring(1);
-            return this.config.scopeBase + relativePath;
-        },
-
-        log: function() {
-            console.log('[Navigation Interceptor]', ...arguments);
-        },
-
-        uninstall: function() {
-            try {
-                if (this.originalMethods.pushState) {
-                    history.pushState = this.originalMethods.pushState;
-                }
-                if (this.originalMethods.replaceState) {
-                    history.replaceState = this.originalMethods.replaceState;
-                }
-                if (this.originalMethods.windowOpen) {
-                    global.open = this.originalMethods.windowOpen;
-                }
-                this.initialized = false;
-                delete global._NavigationInterceptorInstalled;
-                this.log('Navigation Interceptor uninstalled');
-            } catch (error) {
-                console.error('[Navigation Interceptor] Failed to uninstall:', error);
-            }
+        var fixedHref = fixPath(href);
+        reportChange('click', href, fixedHref, { target: link.getAttribute('target') });
+        var target = link.getAttribute('target');
+        if (target === '_blank' || event.ctrlKey || event.metaKey) {
+          originalOpen(fixedHref, target || '_blank');
+        } else {
+          global.location.href = fixedHref;
         }
+      } catch (_) { /* 静默处理 */ }
+    }, true);
+
+    // 2) history 拦截
+    history.pushState = function (state, title, url) {
+      try {
+        var finalUrl = (url !== undefined && url !== null) ? fixPath(url) : url;
+        reportChange('pushState', url, finalUrl);
+        return originalPushState(state, title, finalUrl);
+      } catch (_) {
+        return originalPushState(state, title, url);
+      }
     };
 
-    global.NavigationInterceptor = NavigationInterceptor;
+    history.replaceState = function (state, title, url) {
+      try {
+        var finalUrl = (url !== undefined && url !== null) ? fixPath(url) : url;
+        reportChange('replaceState', url, finalUrl);
+        return originalReplaceState(state, title, finalUrl);
+      } catch (_) {
+        return originalReplaceState(state, title, url);
+      }
+    };
 
-    if (global._NavigationInterceptorConfig) {
-        NavigationInterceptor.init(global._NavigationInterceptorConfig);
-    }
+    // 3) popstate 补救：当路径不完整时，替换为修复后的路径
+    global.addEventListener('popstate', function (event) {
+      try {
+        var currentPath = global.location.pathname;
+        if (!needsPathFix(currentPath)) return;
+        var fixedPath = fixPath(currentPath) + global.location.search + global.location.hash;
+        reportChange('popstate', currentPath + global.location.search + global.location.hash, fixedPath);
+        originalReplaceState(event.state, '', fixedPath);
+      } catch (_) { /* 静默处理 */ }
+    });
+
+    // 4) 表单提交拦截：修复 action 为作用域内路径
+    document.addEventListener('submit', function (event) {
+      try {
+        var form = event.target;
+        if (!form || form.tagName !== 'FORM') return;
+        var action = form.getAttribute('action');
+        if (!action || !needsPathFix(action)) return;
+        var fixedAction = fixPath(action);
+        reportChange('form', action, fixedAction, { method: form.method || 'GET' });
+        form.setAttribute('action', fixedAction);
+      } catch (_) { /* 静默处理 */ }
+    }, true);
+  }
+
+  // 加载即执行
+  installInterceptors();
 
 })(typeof window !== 'undefined' ? window : this);
