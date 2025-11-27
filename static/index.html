@@ -1,44 +1,53 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
+
 <head>
     <meta charset="UTF-8">
-    <title>端口管理服务</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ports</title>
     <link rel="stylesheet" href="static/style.css">
 </head>
+
 <body>
-    <div class="container">
+    <div class="vscode-container">
         <div class="header">
-            <h1>端口管理服务</h1>
-            <p>智能端口管理和代理链接生成</p>
+            <div class="title-section">
+                <span class="title">PORTS</span>
+            </div>
         </div>
-        
-        <div class="port-table-container">
-            <table class="port-table">
+
+        <div class="table-container">
+            <table class="ports-table">
                 <thead>
                     <tr>
-                        <th></th>
-                        <th>端口</th>
-                        <th class="proxy-column">URL地址</th>
-                        <th>进程信息</th>
-                        <th class="proxy-column">Service Worker</th>
+                        <th class="col-port">Port</th>
+                        <th class="col-address">Forwarded Address</th>
+                        <th class="col-proxy-mode">Proxy Mode</th>
+                        <th class="col-process">Running Process</th>
                     </tr>
                 </thead>
                 <tbody id="portTableBody">
-                    <!-- 端口数据将在这里动态生成 -->
+                    <!-- Rows injected by JS -->
                 </tbody>
-                <tfoot>
-                    <tr class="add-port-row">
-                        <td></td>
-                        <td>
-                            <input type="number" id="portInput" placeholder="输入端口号自动添加" min="1" max="65535">
+                <tfoot id="portTableFooter">
+                    <tr class="add-port-row" id="addPortRow">
+                        <td colspan="4">
+                            <div class="add-port-container">
+                                <button id="addPortBtn" class="add-port-btn" type="button">Forward a Port</button>
+                                <input type="number" id="addPortInput" class="add-port-input" placeholder="Port number"
+                                    min="1" max="65535" style="display: none;">
+                            </div>
                         </td>
-                        <td colspan="4"></td>
                     </tr>
                 </tfoot>
             </table>
+            <div id="emptyState" class="empty-state" style="display: none;">
+                No forwarded ports.
+            </div>
         </div>
     </div>
 
     <script src="static/app.js"></script>
 </body>
+
 </html>

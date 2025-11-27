@@ -11,15 +11,18 @@
 
 ### 🖥️ 端口监控管理
 - 实时检测端口监听状态（TCP connect_ex）
-- 展示进程信息（PID、名称、完整命令行）
-- 输入端口号自动添加（1秒防抖）
-- 合并浏览器已注册SW的端口视图（即便后端不在监听）
+- 展示进程信息（PID、完整命令行）
+- 智能增量更新：只更新变化的端口，保护用户交互
+- 自动同步：SW 注册的端口自动向后端请求信息
 
-### 🔧 统一Service Worker（双模式）
-- 子路径修复（mode=s{depth}）：修正请求路径前缀与多层编码错位，必要时重定向到正确URL
-- HTTP隧道（mode=t）：改写请求到后端 `/api/http-tunnel/{port}?u=...` 透传至本机服务，适配更严格的同源/解码场景
-- 导航拦截器注入：在导航响应中自动注入前端脚本，修复 a/link/history/location/form 等导航行为的子路径问题
-- 一键注册/注销与模式切换（前端UI，按端口保存策略）
+### 🔧 统一Service Worker（动态配置）
+- **动态策略切换**：通过 `postMessage` 实时配置策略，策略变更时自动刷新客户端
+- **三种模式**：
+  - None：不处理任何请求（默认）
+  - Subpath：修正请求路径前缀与多层编码错位
+  - Tunnel：改写请求到后端 HTTP 隧道透传
+- **导航拦截器**：自动注入脚本，修复子路径环境下的导航行为
+- **自动注册**：添加端口时自动注册 SW，默认策略为 None
 
 ## 项目架构
 
@@ -51,59 +54,86 @@
 - 以 `GRADIO_SERVER_PORT`（默认7860）启动 `PortServer`，不做子路径检查
 
 #### 4. 前端（static/）
-- index.html / style.css：简洁表格；端口状态、进程信息、代理URL、SW模式列
-- app.js：
-  - 拉取 `/api/url-template` 判断代理支持
-  - 探测nginx解码深度（调用 `/api/test-encoding`，多层编码与验证）
-  - 管理端口列表与SW状态；按端口保存策略（none/subpath/tunnel）
-  - 注册SW：`/unified_service_worker.js?mode=s{depth}|t`，作用域为模板生成的端口路径
+- **index.html / style.css**：VSCode 风格端口管理界面
+  - 端口状态指示（绿点表示监听中）
+  - 进程信息显示（格式：`(PID) 完整命令行`）
+  - 代理 URL 链接
+  - Proxy Mode 下拉框（None/Subpath/Tunnel）
+- **app.js**：
+  - 智能增量更新：只更新变化的端口行，保护用户交互状态
+  - 自动同步：SW 注册的端口自动向后端请求信息
+  - 探测 nginx 解码深度，自动适配代理环境
+  - 添加端口时自动注册 SW（默认策略 None）
+  - 策略切换通过 `postMessage` 动态配置 SW
 
 #### 5. 浏览器脚本
-- unified_service_worker.js：子路径修复或隧道，导航拦截器注入与客户端强制刷新消息处理
-- navigation_interceptor.js：在子路径环境下拦截并修正导航相关API与交互
+- **unified_service_worker.js**：统一 SW 脚本
+  - 默认策略：None（不处理任何请求）
+  - 通过 `postMessage` 动态配置策略（None/Subpath/Tunnel）
+  - 策略变更时自动刷新客户端页面
+  - 导航拦截器注入，修正子路径导航行为
+- **navigation_interceptor.js**：拦截并修正 a/link/history/location/form 等导航 API
 
 ## 关键算法与流程片段
 
-### nginx解码深度探测（前端）
+### 智能增量更新
 ```javascript
-// 简化版：逐层额外编码，与服务端返回对照并验证
-async function detectNginxEncoding(basePath) {
-  const base = encodeURIComponent("test/path"); // 浏览器一次编码的基准
-  let maxLayers = 4, attempts = 8;
-  for (; maxLayers <= attempts; maxLayers++) {
-    let seg = base;
-    for (let i = 0; i < maxLayers; i++) seg = encodeURIComponent(seg);
-    const r = await fetch(`${basePath}/api/test-encoding/${seg}`);
-    if (!r.ok) break;
-    const { path } = await r.json();
-    let cur = path, steps = 0;
-    while (cur !== seg && steps < maxLayers) { cur = encodeURIComponent(cur); steps++; }
-    const depth = (cur === seg) ? steps : 0;
-    if (await verify(base, depth, basePath)) return depth;
-  }
-  return 0;
+// 只更新变化的端口行，保护用户交互
+displayPorts(ports) {
+    // 检测用户是否正在操作
+    if (document.activeElement.tagName === 'SELECT') {
+        return; // 跳过更新，避免打断
+    }
+    
+    // 增量更新：只添加/删除/更新变化的行
+    allPorts.forEach(port => {
+        const existingRow = tbody.querySelector(`tr[data-port="${port.port}"]`);
+        if (!existingRow) {
+            tbody.appendChild(createRow(port)); // 新端口
+        } else {
+            updateRowIfNeeded(existingRow, port); // 只更新变化的单元格
+        }
+    });
 }
 ```
 
-### 路径式HTTP隧道（SW端）
+### Service Worker 动态配置
 ```javascript
-// 仅在需要时对同源请求进行改写：/api/http-tunnel/{port}?u=...
-event.respondWith(fetch(proxyUrl, init)); // proxyUrl 由 scope 与余路径拼装
+// 前端：注册 SW（无参数）
+await navigator.serviceWorker.register('/unified_service_worker.js', { scope });
+
+// 前端：切换策略
+registration.active.postMessage({
+    type: 'CONFIGURE',
+    data: { strategy: 'subpath', decodeDepth: 0 }
+});
+
+// SW：接收配置并自动刷新客户端
+self.addEventListener('message', (event) => {
+    if (event.data.type === 'CONFIGURE') {
+        strategy = event.data.data.strategy;
+        // 策略变更后自动刷新所有客户端
+        self.clients.matchAll().then(clients => {
+            clients.forEach(client => client.navigate(client.url));
+        });
+    }
+});
 ```
 
 ## API接口
 
 ### RESTful
 ```
-GET  /                           # 主界面
-GET  /api/ports                  # 端口列表
-GET  /api/port/{port}            # 单端口信息
-GET  /api/url-template           # 代理模板与支持标记
-GET  /api/test-encoding/{path}   # 返回服务端看到的路径
-*    /api/http-tunnel/{port}?u=/...  # HTTP隧道透传到 localhost:{port}
-GET  /unified_service_worker.js  # 统一SW脚本
-GET  /navigation_interceptor.js  # 导航拦截器
-GET  /static/*                   # 静态资源
+GET     /                              # 主界面
+GET     /api/ports                     # 端口列表
+GET     /api/port/{port}               # 单端口信息
+DELETE  /api/port/{port}               # 删除端口
+GET     /api/url-template              # 代理模板与支持标记
+GET     /api/test-encoding/{path}      # 返回服务端看到的路径
+*       /api/http-tunnel/{port}?u=/... # HTTP隧道透传到 localhost:{port}
+GET     /unified_service_worker.js     # 统一SW脚本（无参数）
+GET     /navigation_interceptor.js     # 导航拦截器
+GET     /static/*                      # 静态资源
 ```
 
 ### 数据结构
@@ -119,17 +149,25 @@ class PortInfo:
 
 ## 代理策略对比
 
-### 子路径修复（mode=s{depth}）
-- 适用：标准子路径代理，存在URL编码/解码不一致
-- 原理：修正scope前缀与选择性多次编码；对子路径不完整进行 307 重定向
-- 优势：轻量、性能好、兼容度高
-- 限制：依赖代理对编码/路径的可预测行为
+### None（默认）
+- **适用**：刚添加端口，暂不需要代理修复
+- **行为**：SW 已注册但不处理任何请求
+- **优势**：零开销，不影响正常访问
+- **使用场景**：端口服务本身已正确处理子路径
 
-### HTTP隧道（mode=t）
-- 适用：子路径策略仍失败、同源/CSRF严格或特殊代理限制
-- 原理：改写为后端隧道端点，重写 Origin/Referer，保持方法与体
-- 优势：绕过代理URL处理，覆盖更广
-- 限制：增加一次后端透传与潜在性能开销
+### Subpath（子路径修复）
+- **适用**：标准子路径代理，存在 URL 编码/解码不一致
+- **原理**：修正 scope 前缀与选择性多次编码；对子路径不完整进行 307 重定向
+- **优势**：轻量、性能好、兼容度高
+- **限制**：依赖代理对编码/路径的可预测行为
+- **使用场景**：大多数子路径代理环境
+
+### Tunnel（HTTP 隧道）
+- **适用**：子路径策略仍失败、同源/CSRF 严格或特殊代理限制
+- **原理**：改写为后端隧道端点，重写 Origin/Referer，保持方法与体
+- **优势**：绕过代理 URL 处理，覆盖更广
+- **限制**：增加一次后端透传与潜在性能开销
+- **使用场景**：复杂代理环境或 Subpath 模式失效时
 
 ## 使用方式
 
@@ -139,7 +177,7 @@ class PortInfo:
 python server.py --host 0.0.0.0 --port 3000
 ```
 
-### Gradio环境
+### Gradio 环境
 ```bash
 # 自动安装依赖并启动到 GRADIO_SERVER_PORT（默认7860）
 python main.gradio.py
@@ -152,4 +190,3 @@ GRADIO_SERVER_PORT=8080 python main.gradio.py
 pip install -r requirements.txt
 # main.gradio.py 会自动安装：aiohttp, jupyter-server, psutil, requests
 ```
-

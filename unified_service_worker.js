@@ -1,27 +1,13 @@
-// Service Worker: subpath 修复与 tunnel 透传（mode=s<depth> | t）
+// Service Worker: subpath 修复与 tunnel 透传（动态配置）
 
 const scriptUrl = new URL(self.location.href);
-const mode = scriptUrl.searchParams.get('mode') || 's0';
 const scope = new URL(self.registration.scope).pathname;
 
-let strategy, decodeDepth = 0;
+// 默认策略：none（不处理任何请求）
+let strategy = 'none';
+let decodeDepth = 0;
 
-if (mode.startsWith('s')) {
-    strategy = 'subpath';
-    
-    if (mode.length >= 2) {
-        const depthChar = mode[1];
-        decodeDepth = parseInt(depthChar) || 0;
-    }
-    
-
-} else if (mode.startsWith('t')) {
-    strategy = 'tunnel';
-} else {
-    strategy = 'subpath';
-}
-
-console.log(`[SW] Mode: ${mode}, Strategy: ${strategy}, Depth: ${decodeDepth}`);
+console.log(`[SW] Initialized with default strategy: ${strategy}`);
 
 // 工具函数
 
@@ -249,15 +235,30 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'FORCE_NAVIGATE_ALL_CLIENTS') {
-        console.log(`[SW] 收到强制刷新指令`);
+    if (event.data && event.data.type === 'CONFIGURE') {
+        // 配置 SW 策略
+        const oldStrategy = strategy;
+        const oldDepth = decodeDepth;
+        const newStrategy = event.data.data.strategy || 'none';
+        const newDepth = event.data.data.decodeDepth || 0;
         
+        // 检查策略是否真的改变了
+        if (oldStrategy === newStrategy && oldDepth === newDepth) {
+            console.log(`[SW] Strategy unchanged: ${strategy}, depth: ${decodeDepth}`);
+            return;
+        }
+        
+        // 更新策略
+        strategy = newStrategy;
+        decodeDepth = newDepth;
+        console.log(`[SW] Strategy updated: ${oldStrategy} -> ${strategy}, depth: ${oldDepth} -> ${decodeDepth}`);
+        
+        // 策略变更后自动刷新所有客户端
         self.clients.matchAll({
-            includeUncontrolled: false,
+            includeUncontrolled: true,
             type: 'window'
         }).then(clients => {
-            console.log(`[SW] 强制刷新 ${clients.length} 个客户端`);
-            
+            console.log(`[SW] Refreshing ${clients.length} client(s) after strategy change`);
             clients.forEach(client => {
                 client.navigate(client.url).catch(() => {});
             });
@@ -266,6 +267,11 @@ self.addEventListener('message', (event) => {
 });
 
 self.addEventListener('fetch', event => {
+    // 如果策略是 none，不处理任何请求
+    if (strategy === 'none') {
+        return;
+    }
+    
     const urlStr = event.request.url;
     if (!(urlStr.startsWith('http://') || urlStr.startsWith('https://'))) {
         return;
@@ -300,7 +306,7 @@ self.addEventListener('fetch', event => {
 
     if (strategy === 'tunnel') {
         TunnelHandler.handleFetch(event);
-    } else {
+    } else if (strategy === 'subpath') {
         SubpathHandler.handleFetch(event);
     }
 });
@@ -346,5 +352,3 @@ ${NAVIGATION_INTERCEPTOR_CONTENT}
         return response;
     }
 }
-
-console.log(`[SW] Initialized with mode: ${mode}`);

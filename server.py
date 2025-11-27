@@ -62,6 +62,7 @@ class PortServer:
         self.app.router.add_get("/", self.index_handler)
         self.app.router.add_get("/api/ports", self.list_ports_handler)
         self.app.router.add_get("/api/port/{port}", self.port_info_handler)
+        self.app.router.add_delete("/api/port/{port}", self.delete_port_handler)
         self.app.router.add_get("/api/url-template", self.url_template_handler)
         self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
         # 路径模式隧道（保持方法与体，端口在路径，余路径在参数 u）
@@ -109,6 +110,19 @@ class PortServer:
         port_info = self.port_cache[port]
         self._update_port_info(port_info)
         return web.json_response(port_info.to_dict())
+
+    async def delete_port_handler(self, request):
+        """删除端口"""
+        try:
+            port = int(request.match_info["port"])
+        except ValueError:
+            return web.json_response({"error": "无效的端口号"}, status=400)
+
+        if port in self.port_cache:
+            del self.port_cache[port]
+            return web.json_response({"success": True})
+        
+        return web.json_response({"success": False, "error": "端口不存在"}, status=404)
 
     async def url_template_handler(self, request):
         """获取当前环境的URL模板"""
