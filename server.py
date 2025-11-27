@@ -7,7 +7,7 @@ import asyncio
 import os
 import socket
 import time
-import urllib
+from collections import OrderedDict
 from typing import Dict, Optional
 
 import psutil
@@ -53,16 +53,16 @@ class PortServer:
         self.host = host
         self.port = port if port is not None else get_available_port()
         self.app = web.Application()
-        self.port_cache: Dict[int, PortInfo] = {}
+        # 使用 OrderedDict 实现简单的 LRU 缓存
+        self.port_cache: OrderedDict[int, PortInfo] = OrderedDict()
+        self.cache_max_size = 100
         self.proxy_template = detect_service_config()
         self._setup_routes()
 
     def _setup_routes(self):
         """设置路由"""
         self.app.router.add_get("/", self.index_handler)
-        self.app.router.add_get("/api/ports", self.list_ports_handler)
         self.app.router.add_get("/api/port/{port}", self.port_info_handler)
-        self.app.router.add_delete("/api/port/{port}", self.delete_port_handler)
         self.app.router.add_get("/api/url-template", self.url_template_handler)
         self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
         # 路径模式隧道（保持方法与体，端口在路径，余路径在参数 u）
@@ -88,14 +88,7 @@ class PortServer:
         except FileNotFoundError:
             return web.Response(text="静态文件未找到", status=404)
 
-    async def list_ports_handler(self, request):
-        """获取端口列表"""
-        for port_info in self.port_cache.values():
-            self._update_port_info(port_info)
 
-        ports = [port_info.to_dict() for port_info in self.port_cache.values()]
-        ports.sort(key=lambda x: x["port"])
-        return web.json_response(ports)
 
     async def port_info_handler(self, request):
         """获取特定端口信息"""
@@ -111,18 +104,7 @@ class PortServer:
         self._update_port_info(port_info)
         return web.json_response(port_info.to_dict())
 
-    async def delete_port_handler(self, request):
-        """删除端口"""
-        try:
-            port = int(request.match_info["port"])
-        except ValueError:
-            return web.json_response({"error": "无效的端口号"}, status=400)
 
-        if port in self.port_cache:
-            del self.port_cache[port]
-            return web.json_response({"success": True})
-        
-        return web.json_response({"success": False, "error": "端口不存在"}, status=404)
 
     async def url_template_handler(self, request):
         """获取当前环境的URL模板"""
@@ -266,7 +248,7 @@ class PortServer:
             return web.Response(text=f"隧道处理异常: {e}", status=500)
 
     def _update_port_info(self, port_info: PortInfo):
-        """更新端口信息"""
+        """更新端口信息（带 LRU 缓存管理）"""
         # 避免频繁检查
         if time.time() - port_info.last_check < 5:
             return
@@ -290,6 +272,15 @@ class PortServer:
             port_info.process_cmdline = None
 
         port_info.proxy_url = generate_proxy_url(port_info.port)
+        
+        # LRU 缓存管理：移到末尾（最近使用）
+        if port_info.port in self.port_cache:
+            self.port_cache.move_to_end(port_info.port)
+        
+        # 检查缓存大小，删除最旧的
+        if len(self.port_cache) > self.cache_max_size:
+            oldest_port = next(iter(self.port_cache))
+            del self.port_cache[oldest_port]
 
     def _is_port_listening(self, port: int) -> bool:
         """检查端口是否在监听"""

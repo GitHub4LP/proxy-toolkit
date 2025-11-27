@@ -13,17 +13,18 @@
 - 实时检测端口监听状态（TCP connect_ex）
 - 展示进程信息（PID、完整命令行）
 - 智能增量更新：只更新变化的端口，保护用户交互
-- 自动同步：SW 注册的端口自动向后端请求信息
+- 数据源：SW registrations（浏览器持久化）
+- 后端 LRU 缓存：自动淘汰不常用端口
 
 ### 🔧 统一Service Worker（动态配置）
-- **动态策略切换**：通过 `postMessage` 实时配置策略，策略变更时自动刷新客户端
+- **动态策略切换**：通过 `postMessage` 实时配置策略
 - **四种模式**：
   - None：不处理任何请求（默认）
   - Subpath：修正请求路径前缀与多层编码错位
   - Tunnel：改写请求到后端 HTTP 隧道透传
-  - Hybrid：智能混合策略，自动检测 `%2F` 特殊解码并路由
+  - Hybrid：智能混合（大部分走 Subpath，包含 `%2F` 的走 Tunnel）
 - **导航拦截器**：自动注入脚本，修复子路径环境下的导航行为
-- **自动注册**：添加端口时自动注册 SW，默认策略为 None
+- **自动注册**：添加端口时自动注册 SW
 
 ## 项目架构
 
@@ -32,23 +33,23 @@
 #### 1. server.py — 主服务（aiohttp）
 - 路由：
   - GET `/` 静态首页
-  - GET `/api/ports` 端口列表
-  - GET `/api/port/{port}` 单端口刷新
-  - GET `/api/url-template` 环境URL模板与是否支持代理
-  - GET `/api/test-encoding/{path:.*}` 返回服务端看到的路径（用于前端探测解码层）
-  - ANY `/api/http-tunnel/{port}` 路径式HTTP隧道，余路径通过查询参数 `u`
-  - GET `/unified_service_worker.js` 统一Service Worker脚本（根作用域允许头）
-  - GET `/navigation_interceptor.js` 导航拦截器脚本
+  - GET `/api/port/{port}` 单端口查询（LRU 缓存，最多 100 个）
+  - GET `/api/url-template` 环境 URL 模板
+  - GET `/api/test-encoding/{path:.*}` 原始路径（用于编码检测）
+  - ANY `/api/http-tunnel/{port}` HTTP 隧道透传
+  - GET `/unified_service_worker.js` 统一 SW 脚本
+  - GET `/navigation_interceptor.js` 导航拦截器
   - `/static/*` 静态资源
 - 端口与进程：psutil.net_connections 定位进程，返回 PID/名称/完整 cmdline
-- 启动条件：仅在检测到子路径环境且非根路径时由 `server.py` 的 `main()` 启动（Gradio启动器除外）
+- LRU 缓存：自动淘汰不常用端口，无需显式删除
+- 启动条件：仅在检测到子路径环境时启动
 
 #### 2. port_proxy.py — 环境检测与模板生成
-- JupyterLab：枚举运行中的服务器，校验 `base_url + proxy/{port}/?token=...` 可达，返回 `base_url + proxy/{{port}}/`
-- Code Server：进程环境变量 `VSCODE_PROXY_URI` 作为模板
-- AI Studio：`STUDIO_MODEL_API_URL_PREFIX + JUPYTERHUB_SERVICE_PREFIX + gradio/{{port}}/`，并更新 `~/.webide/proxy_config.json`
-- detect_service_config：在本机进程与端口的交叉中识别服务类型，返回路径段数最短的模板
-- generate_proxy_url(port)：用模板替换 `{{port}}`，在 AI Studio 写入配置
+- JupyterLab：枚举运行中的服务器，返回 `base_url + proxy/{{port}}/`
+- Code Server：读取环境变量 `VSCODE_PROXY_URI`
+- AI Studio：拼接 `STUDIO_MODEL_API_URL_PREFIX + JUPYTERHUB_SERVICE_PREFIX + gradio/{{port}}/`
+- detect_service_config：识别服务类型，返回路径段数最短的模板
+- generate_proxy_url(port)：用模板替换 `{{port}}`
 
 #### 3. main.gradio.py — Gradio环境启动器
 - 自动安装依赖（aiohttp、jupyter-server、psutil、requests）
@@ -56,51 +57,32 @@
 
 #### 4. 前端（static/）
 - **index.html / style.css**：VSCode 风格端口管理界面
-  - 端口状态指示（绿点表示监听中）
-  - 进程信息显示（格式：`(PID) 完整命令行`）
-  - 代理 URL 链接
-  - Proxy Mode 下拉框（None/Subpath/Tunnel）
 - **app.js**：
-  - 智能增量更新：只更新变化的端口行，保护用户交互状态
-  - 自动同步：SW 注册的端口自动向后端请求信息
-  - 探测 nginx 解码深度，自动适配代理环境
-  - 添加端口时自动注册 SW（默认策略 None）
-  - 策略切换通过 `postMessage` 动态配置 SW
+  - 数据源：从 SW registrations 读取端口列表
+  - 智能增量更新：只更新变化的端口行，保护用户交互
+  - 编码检测：自动检测基准解码深度和 `%2F` 特殊解码
+  - 策略切换：通过 `postMessage` 动态配置 SW
+  - 快速删除：立即清理前端状态，异步注销 SW
 
 #### 5. 浏览器脚本
 - **unified_service_worker.js**：统一 SW 脚本
-  - 默认策略：None（不处理任何请求）
-  - 通过 `postMessage` 动态配置策略（None/Subpath/Tunnel）
-  - 策略变更时自动刷新客户端页面
-  - 导航拦截器注入，修正子路径导航行为
-- **navigation_interceptor.js**：拦截并修正 a/link/history/location/form 等导航 API
+  - 支持四种策略：None/Subpath/Tunnel/Hybrid
+  - 通过 `postMessage` 动态配置
+  - Hybrid 模式：根据路径内容智能路由
+  - 导航拦截器注入
+- **navigation_interceptor.js**：修正子路径导航行为
 
-## 关键算法与流程片段
+## 关键算法
 
-### %2F 特殊解码检测
+### 编码深度检测
 ```javascript
-// 检测 %2F 是否被额外解码（独立于基准深度）
-async detectSlashExtraDecoding() {
-    // 1. 先检测基准深度（通过普通字符）
-    const baseDepth = this.nginxDecodeDepth;
-    
-    // 2. 发送 baseDepth + 1 层编码的 %2F
-    let encoded = '%2F';
-    for (let i = 0; i < baseDepth + 1; i++) {
-        encoded = encodeURIComponent(encoded);
-    }
-    
-    // 3. 观察服务端返回
-    const result = await fetch(`/api/test-encoding/${encoded}`);
-    
-    // 4. 判断：如果返回 '/' 或 '%2F'，说明被额外解码
-    //    如果返回更高层编码（如 '%252F'），说明遵循基准深度
-    if (result.path === '/' || result.path === '%2F') {
-        this.slashExtraDecoding = true;  // 需要 Hybrid 策略
-    } else {
-        this.slashExtraDecoding = false; // Subpath 即可
-    }
-}
+// 1. 基准深度检测（使用空格，避免 %2F 干扰）
+const testSegment = "test path";  // → "test%20path"
+// 发送多层编码，通过反向编码计算解码深度
+
+// 2. %2F 特殊解码检测
+const testSegment = "test/path";  // → "test%2Fpath"
+// 如果后端返回 "test/path"（包含真实斜杠），说明 %2F 被额外解码
 ```
 
 ### 智能增量更新
@@ -124,111 +106,57 @@ displayPorts(ports) {
 }
 ```
 
-### Service Worker 动态配置
+### Hybrid 策略智能路由
 ```javascript
-// 前端：注册 SW（无参数）
-await navigator.serviceWorker.register('/unified_service_worker.js', { scope });
-
-// 前端：切换策略（包含检测结果）
-registration.active.postMessage({
-    type: 'CONFIGURE',
-    data: { 
-        strategy: 'hybrid',           // none | subpath | tunnel | hybrid
-        decodeDepth: 2,               // 基准解码深度
-        slashExtraDecoding: true      // %2F 是否被额外解码
+// SW 中根据路径内容动态选择处理方式
+if (strategy === 'hybrid') {
+    if (slashExtraDecoding && /%2F/i.test(pathname)) {
+        TunnelHandler.handleFetch(event);  // 包含 %2F 走 Tunnel
+    } else {
+        SubpathHandler.handleFetch(event); // 其他走 Subpath
     }
-});
-
-// SW：接收配置并智能路由
-self.addEventListener('message', (event) => {
-    if (event.data.type === 'CONFIGURE') {
-        strategy = event.data.data.strategy;
-        slashExtraDecoding = event.data.data.slashExtraDecoding;
-        
-        // Hybrid 策略：根据路径内容动态选择处理方式
-        if (strategy === 'hybrid' && slashExtraDecoding && /%2F/i.test(pathname)) {
-            TunnelHandler.handleFetch(event);  // 包含 %2F 走隧道
-        } else {
-            SubpathHandler.handleFetch(event); // 其他走子路径修复
-        }
-    }
-});
+}
 ```
 
 ## API接口
 
-### RESTful
 ```
 GET     /                              # 主界面
-GET     /api/ports                     # 端口列表
-GET     /api/port/{port}               # 单端口信息
-DELETE  /api/port/{port}               # 删除端口
+GET     /api/port/{port}               # 单端口信息（后端 LRU 缓存）
 GET     /api/url-template              # 代理模板与支持标记
-GET     /api/test-encoding/{path}      # 返回服务端看到的路径
-*       /api/http-tunnel/{port}?u=/... # HTTP隧道透传到 localhost:{port}
-GET     /unified_service_worker.js     # 统一SW脚本（无参数）
+GET     /api/test-encoding/{path}      # 返回原始路径（用于编码检测）
+*       /api/http-tunnel/{port}?u=/... # HTTP 隧道透传
+GET     /unified_service_worker.js     # 统一 SW 脚本
 GET     /navigation_interceptor.js     # 导航拦截器
 GET     /static/*                      # 静态资源
 ```
 
-### 数据结构
-```python
-class PortInfo:
-    port: int
-    is_listening: bool
-    process_name: str | None
-    process_pid: int | None
-    process_cmdline: str | None
-    proxy_url: str | None
-```
 
-## 代理策略对比
 
-### None（默认）
-- **适用**：刚添加端口，暂不需要代理修复
-- **行为**：SW 已注册但不处理任何请求
-- **优势**：零开销，不影响正常访问
-- **使用场景**：端口服务本身已正确处理子路径
+## 代理策略
 
-### Subpath（子路径修复）
-- **适用**：标准子路径代理，存在 URL 编码/解码不一致
-- **原理**：修正 scope 前缀与选择性多次编码；对子路径不完整进行 307 重定向
-- **优势**：轻量、性能好、兼容度高
-- **限制**：依赖代理对编码/路径的可预测行为
-- **使用场景**：大多数子路径代理环境
-
-### Tunnel（HTTP 隧道）
-- **适用**：子路径策略仍失败、同源/CSRF 严格或特殊代理限制
-- **原理**：改写为后端隧道端点，重写 Origin/Referer，保持方法与体
-- **优势**：绕过代理 URL 处理，覆盖更广
-- **限制**：增加一次后端透传与潜在性能开销
-- **使用场景**：复杂代理环境或 Subpath 模式失效时
-
-### Hybrid（智能混合）
-- **适用**：代理环境对 `%2F` 有特殊解码处理
-- **原理**：自动检测 `%2F` 是否被额外解码；大部分请求走 Subpath，包含 `%2F` 的请求走 Tunnel
-- **优势**：兼顾性能与兼容性，自动适配特殊字符处理
-- **检测逻辑**：通过发送多层编码的 `%2F`，判断是否被单独解码
-- **使用场景**：推荐用于检测到 `%2F` 特殊解码的环境
+| 策略 | 适用场景 | 原理 | 优势 |
+|------|---------|------|------|
+| **None** | 端口服务已正确处理子路径 | 不处理任何请求 | 零开销 |
+| **Subpath** | 标准子路径代理 | 修正路径前缀与编码错位 | 轻量、高性能 |
+| **Tunnel** | 复杂代理环境 | 改写为后端隧道透传 | 覆盖面广 |
+| **Hybrid** | `%2F` 被特殊解码的环境 | 智能路由（普通走 Subpath，`%2F` 走 Tunnel） | 兼顾性能与兼容性 |
 
 ## 使用方式
 
-### 标准/开发环境
+### 标准环境
 ```bash
-# 仅在检测到子路径环境且非根路径时，server.py 的 main 会启动
 python server.py --host 0.0.0.0 --port 3000
+# 仅在检测到子路径环境时启动
 ```
 
 ### Gradio 环境
 ```bash
-# 自动安装依赖并启动到 GRADIO_SERVER_PORT（默认7860）
 python main.gradio.py
-# 或指定端口
-GRADIO_SERVER_PORT=8080 python main.gradio.py
+# 默认端口 7860，可通过 GRADIO_SERVER_PORT 环境变量指定
 ```
 
 ### 依赖
 ```bash
 pip install -r requirements.txt
-# main.gradio.py 会自动安装：aiohttp, jupyter-server, psutil, requests
 ```

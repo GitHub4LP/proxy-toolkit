@@ -7,6 +7,7 @@ class PortApp {
         this.nginxDecodeDepth = 0;
         this.slashExtraDecoding = false;
         this.swConfiguredPorts = new Set(); // 记录已配置的端口
+        this.deletingPorts = new Set(); // 记录正在删除的端口
 
         // URL template related
         this.urlTemplate = null;
@@ -238,7 +239,9 @@ class PortApp {
 
         try {
             const registrations = await navigator.serviceWorker.getRegistrations();
-            this.serviceWorkerStates.clear();
+            
+            // 记录找到的端口
+            const foundPorts = new Set();
 
             for (const registration of registrations) {
                 const scriptURL = registration.active?.scriptURL ||
@@ -249,6 +252,13 @@ class PortApp {
 
                 const port = this.extractPortFromScope(registration.scope);
                 if (port) {
+                    // 忽略正在删除的端口
+                    if (this.deletingPorts.has(port)) {
+                        continue;
+                    }
+                    
+                    foundPorts.add(port);
+                    
                     const state = registration.active ? 'active' :
                         registration.waiting ? 'waiting' :
                             registration.installing ? 'installing' : 'unknown';
@@ -279,6 +289,14 @@ class PortApp {
                             this.swConfiguredPorts.add(port);
                         }
                     }
+                }
+            }
+            
+            // 清理已注销但仍在 serviceWorkerStates 中的端口
+            for (const port of this.serviceWorkerStates.keys()) {
+                if (!foundPorts.has(port)) {
+                    this.serviceWorkerStates.delete(port);
+                    this.swConfiguredPorts.delete(port);
                 }
             }
         } catch (error) {
@@ -325,10 +343,30 @@ class PortApp {
 
     async refreshPorts() {
         try {
-            const response = await fetch(`${this.basePath}/api/ports`);
-            const ports = await response.json();
+            // 1. 更新 SW 状态（从浏览器读取 registrations）
             await this.updateServiceWorkerStates();
-            this.displayPorts(ports);
+            
+            // 2. 从 SW 状态获取端口列表
+            const ports = Array.from(this.serviceWorkerStates.keys());
+            
+            // 3. 批量请求后端获取实时状态
+            const portInfos = await Promise.all(
+                ports.map(async (port) => {
+                    try {
+                        const response = await fetch(`${this.basePath}/api/port/${port}`);
+                        return await response.json();
+                    } catch (error) {
+                        console.error(`Failed to fetch port ${port}:`, error);
+                        return null;
+                    }
+                })
+            );
+            
+            // 4. 过滤掉失败的请求
+            const validPorts = portInfos.filter(p => p !== null);
+            
+            // 5. 显示端口列表
+            this.displayPorts(validPorts);
         } catch (error) {
             console.error('Refresh ports failed:', error);
         }
@@ -465,62 +503,19 @@ class PortApp {
     }
 
     mergePortData(ports) {
+        // 简化：直接使用后端返回的数据，合并 SW 状态
         const allPorts = new Map();
 
         ports.forEach(port => {
-            allPorts.set(port.port, { ...port, source: 'backend' });
-        });
-
-        this.serviceWorkerStates.forEach((swState, port) => {
-            if (!allPorts.has(port)) {
-                // SW 注册的端口但后端没有信息
-                // 主动请求后端获取该端口信息
-                this.fetchPortInfoIfNeeded(port);
-                
-                const proxyUrl = this.generateProxyUrlForPort(port);
-                allPorts.set(port, {
-                    port: port,
-                    is_listening: false,
-                    process_name: null,
-                    process_pid: null,
-                    process_cmdline: null,
-                    proxy_url: proxyUrl,
-                    source: 'service_worker',
-                    sw_state: swState.state
-                });
-            } else {
-                const existingPort = allPorts.get(port);
-                existingPort.has_service_worker = true;
-                existingPort.sw_state = swState.state;
-            }
+            const swState = this.serviceWorkerStates.get(port.port);
+            allPorts.set(port.port, {
+                ...port,
+                has_service_worker: !!swState,
+                sw_state: swState?.state
+            });
         });
 
         return Array.from(allPorts.values()).sort((a, b) => a.port - b.port);
-    }
-
-    fetchPortInfoIfNeeded(port) {
-        // 避免重复请求
-        if (this.pendingPortRequests && this.pendingPortRequests.has(port)) {
-            return;
-        }
-        
-        if (!this.pendingPortRequests) {
-            this.pendingPortRequests = new Set();
-        }
-        
-        this.pendingPortRequests.add(port);
-        
-        // 异步请求端口信息
-        fetch(`${this.basePath}/api/port/${port}`)
-            .then(response => response.json())
-            .then(() => {
-                // 请求成功后，下次 refreshPorts 会获取到完整信息
-                this.pendingPortRequests.delete(port);
-            })
-            .catch(error => {
-                console.error(`[Fetch Port Info] Failed for port ${port}:`, error);
-                this.pendingPortRequests.delete(port);
-            });
     }
 
     renderPortRow(port) {
@@ -768,39 +763,33 @@ class PortApp {
     async stopForwarding(port) {
         console.log(`[Stop Forwarding] Port ${port}`);
         
-        try {
-            // 1. 切换策略为 none（停止处理请求）
-            const swState = this.serviceWorkerStates.get(port);
-            if (swState && swState.registration && swState.registration.active) {
-                swState.registration.active.postMessage({
-                    type: 'CONFIGURE',
-                    data: { strategy: 'none', decodeDepth: 0 }
-                });
-                console.log(`[Stop Forwarding] Set strategy to none for port ${port}`);
-            }
-            
-            // 2. 注销 SW
-            if (swState && swState.scope) {
-                await this.unregisterSubpathServiceWorker(swState.scope);
-                console.log(`[Stop Forwarding] Unregistered SW for port ${port}`);
-            }
-            
-            // 3. 清理前端状态
-            this.clearPortStrategy(port);
-            this.serviceWorkerStates.delete(port);
-            this.swConfiguredPorts.delete(port);
-            
-            // 4. 删除后端缓存
-            await fetch(`${this.basePath}/api/port/${port}`, {
-                method: 'DELETE'
-            });
-            
-        } catch (error) {
-            console.error(`[Stop Forwarding] Failed for port ${port}:`, error);
-        }
+        // 1. 标记为正在删除
+        this.deletingPorts.add(port);
         
-        // 5. 刷新 UI
-        await this.refreshPorts();
+        // 2. 获取 SW 状态（在删除前）
+        const swState = this.serviceWorkerStates.get(port);
+        
+        // 3. 立即清理前端状态
+        this.clearPortStrategy(port);
+        this.serviceWorkerStates.delete(port);
+        this.swConfiguredPorts.delete(port);
+        
+        // 4. 立即刷新 UI（不等待 SW 注销完成）
+        this.refreshPorts();
+        
+        // 5. 异步注销 SW（不阻塞 UI）
+        if (swState && swState.scope) {
+            this.unregisterSubpathServiceWorker(swState.scope)
+                .then(() => {
+                    this.deletingPorts.delete(port);
+                })
+                .catch(error => {
+                    console.error(`[Stop Forwarding] Failed for port ${port}:`, error);
+                    this.deletingPorts.delete(port);
+                });
+        } else {
+            this.deletingPorts.delete(port);
+        }
     }
 }
 
