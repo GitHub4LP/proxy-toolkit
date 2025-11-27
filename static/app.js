@@ -4,7 +4,6 @@ class PortApp {
         this.basePath = window.location.pathname.replace(/\/$/, '');
         this.serviceWorkerStates = new Map();
         this.portStrategies = new Map();
-        this.addPortTimeout = null;
         this.nginxDecodeDepth = 0;
 
         // URL template related
@@ -133,7 +132,7 @@ class PortApp {
                 maxLayers++;
             }
             this.nginxDecodeDepth = 0;
-        } catch (error) {
+        } catch {
             this.nginxDecodeDepth = 0;
         }
     }
@@ -272,14 +271,6 @@ class PortApp {
         } catch (error) {
             console.error('[Add Port] Failed:', error);
         }
-    }
-
-    async addPortAuto(port) {
-        // Not used in new UI but kept for compatibility if needed
-        try {
-            await fetch(`${this.basePath}/api/port/${port}`);
-            this.refreshPorts();
-        } catch { }
     }
 
     async refreshPorts() {
@@ -605,7 +596,6 @@ class PortApp {
 
         console.log(`[Mode Switch] Port ${port}: ${currentMode} -> ${newMode}`);
         this.setLoadingState(port, true);
-        this.refreshPortDisplay();
 
         try {
             if (newMode === 'none') {
@@ -720,10 +710,6 @@ class PortApp {
             }),
             new Promise(resolve => setTimeout(resolve, 5000))
         ]);
-    }
-
-    refreshPortDisplay() {
-        // Simplified: just do nothing here, let refreshPorts handle it.
     }
 
     async stopForwarding(port) {
