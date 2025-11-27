@@ -17,10 +17,11 @@
 
 ### 🔧 统一Service Worker（动态配置）
 - **动态策略切换**：通过 `postMessage` 实时配置策略，策略变更时自动刷新客户端
-- **三种模式**：
+- **四种模式**：
   - None：不处理任何请求（默认）
   - Subpath：修正请求路径前缀与多层编码错位
   - Tunnel：改写请求到后端 HTTP 隧道透传
+  - Hybrid：智能混合策略，自动检测 `%2F` 特殊解码并路由
 - **导航拦截器**：自动注入脚本，修复子路径环境下的导航行为
 - **自动注册**：添加端口时自动注册 SW，默认策略为 None
 
@@ -76,6 +77,32 @@
 
 ## 关键算法与流程片段
 
+### %2F 特殊解码检测
+```javascript
+// 检测 %2F 是否被额外解码（独立于基准深度）
+async detectSlashExtraDecoding() {
+    // 1. 先检测基准深度（通过普通字符）
+    const baseDepth = this.nginxDecodeDepth;
+    
+    // 2. 发送 baseDepth + 1 层编码的 %2F
+    let encoded = '%2F';
+    for (let i = 0; i < baseDepth + 1; i++) {
+        encoded = encodeURIComponent(encoded);
+    }
+    
+    // 3. 观察服务端返回
+    const result = await fetch(`/api/test-encoding/${encoded}`);
+    
+    // 4. 判断：如果返回 '/' 或 '%2F'，说明被额外解码
+    //    如果返回更高层编码（如 '%252F'），说明遵循基准深度
+    if (result.path === '/' || result.path === '%2F') {
+        this.slashExtraDecoding = true;  // 需要 Hybrid 策略
+    } else {
+        this.slashExtraDecoding = false; // Subpath 即可
+    }
+}
+```
+
 ### 智能增量更新
 ```javascript
 // 只更新变化的端口行，保护用户交互
@@ -102,20 +129,28 @@ displayPorts(ports) {
 // 前端：注册 SW（无参数）
 await navigator.serviceWorker.register('/unified_service_worker.js', { scope });
 
-// 前端：切换策略
+// 前端：切换策略（包含检测结果）
 registration.active.postMessage({
     type: 'CONFIGURE',
-    data: { strategy: 'subpath', decodeDepth: 0 }
+    data: { 
+        strategy: 'hybrid',           // none | subpath | tunnel | hybrid
+        decodeDepth: 2,               // 基准解码深度
+        slashExtraDecoding: true      // %2F 是否被额外解码
+    }
 });
 
-// SW：接收配置并自动刷新客户端
+// SW：接收配置并智能路由
 self.addEventListener('message', (event) => {
     if (event.data.type === 'CONFIGURE') {
         strategy = event.data.data.strategy;
-        // 策略变更后自动刷新所有客户端
-        self.clients.matchAll().then(clients => {
-            clients.forEach(client => client.navigate(client.url));
-        });
+        slashExtraDecoding = event.data.data.slashExtraDecoding;
+        
+        // Hybrid 策略：根据路径内容动态选择处理方式
+        if (strategy === 'hybrid' && slashExtraDecoding && /%2F/i.test(pathname)) {
+            TunnelHandler.handleFetch(event);  // 包含 %2F 走隧道
+        } else {
+            SubpathHandler.handleFetch(event); // 其他走子路径修复
+        }
     }
 });
 ```
@@ -168,6 +203,13 @@ class PortInfo:
 - **优势**：绕过代理 URL 处理，覆盖更广
 - **限制**：增加一次后端透传与潜在性能开销
 - **使用场景**：复杂代理环境或 Subpath 模式失效时
+
+### Hybrid（智能混合）
+- **适用**：代理环境对 `%2F` 有特殊解码处理
+- **原理**：自动检测 `%2F` 是否被额外解码；大部分请求走 Subpath，包含 `%2F` 的请求走 Tunnel
+- **优势**：兼顾性能与兼容性，自动适配特殊字符处理
+- **检测逻辑**：通过发送多层编码的 `%2F`，判断是否被单独解码
+- **使用场景**：推荐用于检测到 `%2F` 特殊解码的环境
 
 ## 使用方式
 

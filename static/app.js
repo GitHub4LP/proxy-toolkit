@@ -5,6 +5,8 @@ class PortApp {
         this.serviceWorkerStates = new Map();
         this.portStrategies = new Map();
         this.nginxDecodeDepth = 0;
+        this.slashExtraDecoding = false;
+        this.swConfiguredPorts = new Set(); // 记录已配置的端口
 
         // URL template related
         this.urlTemplate = null;
@@ -25,6 +27,7 @@ class PortApp {
         await this.loadUrlTemplate();
         if (this.hasProxySupport) {
             await this.detectNginxEncoding();
+            await this.detectSlashExtraDecoding();
         }
         this.setupPortInput(); // Call this after DOM is ready usually, but here is fine
         await this.updateServiceWorkerStates();
@@ -96,7 +99,8 @@ class PortApp {
 
     async detectNginxEncoding() {
         try {
-            const testSegment = "test/path";
+            // 使用包含空格的测试字符串（空格会被编码为 %20，不会像 %2F 那样被特殊处理）
+            const testSegment = "test path";
             let maxLayers = 4;
             const maxAttempts = 8;
             const baseEncoded = encodeURIComponent(testSegment);
@@ -134,6 +138,49 @@ class PortApp {
             this.nginxDecodeDepth = 0;
         } catch {
             this.nginxDecodeDepth = 0;
+        }
+    }
+
+    async detectSlashExtraDecoding() {
+        try {
+            // 使用包含斜杠的测试字符串（未编码）
+            const testSegment = "test/path";
+            const baseEncoded = encodeURIComponent(testSegment); // "test%2Fpath"
+            
+            // 根据基准深度编码
+            let encoded = baseEncoded;
+            for (let i = 0; i < this.nginxDecodeDepth; i++) {
+                encoded = encodeURIComponent(encoded);
+            }
+
+            const response = await fetch(`${this.basePath}/api/test-encoding/${encoded}`);
+            if (!response.ok) {
+                this.slashExtraDecoding = false;
+                return;
+            }
+
+            const result = await response.json();
+            
+            // 判断逻辑：
+            // 如果 %2F 被解码成 /，raw_path 会包含真实的斜杠
+            // 如果 %2F 没被解码，raw_path 会包含 %252F 或更多层编码
+            
+            // 简单判断：检查返回值是否包含真实的斜杠（路径分隔符）
+            // 如果分割后有多个部分，说明包含真实的 /（%2F 被解码了）
+            const pathParts = result.path.split('/');
+            const hasRealSlash = pathParts.filter(p => p !== '').length > 1;
+            
+            if (hasRealSlash) {
+                this.slashExtraDecoding = true;
+            } else {
+                this.slashExtraDecoding = false;
+            }
+            
+            // 合并输出检测结果
+            console.log(`[Encoding Detection] depth: ${this.nginxDecodeDepth}, %2F extra decoding: ${this.slashExtraDecoding}`);
+        } catch (error) {
+            console.warn('[Encoding Detection] Slash detection failed:', error);
+            this.slashExtraDecoding = false;
         }
     }
 
@@ -215,18 +262,21 @@ class PortApp {
                     });
                     
                     // 恢复配置：页面刷新后 SW 重新初始化，需要重新发送配置
-                    if (registration.active) {
+                    // 只在首次发现 SW 或 SW 状态改变时发送配置
+                    if (registration.active && !this.swConfiguredPorts.has(port)) {
                         const savedStrategy = this.getPortStrategy(port);
                         if (savedStrategy && savedStrategy !== 'none') {
                             const config = {
-                                strategy: savedStrategy === 'tunnel' ? 'tunnel' : 'subpath',
-                                decodeDepth: this.nginxDecodeDepth
+                                strategy: savedStrategy === 'tunnel' ? 'tunnel' : 
+                                          savedStrategy === 'hybrid' ? 'hybrid' : 'subpath',
+                                decodeDepth: this.nginxDecodeDepth,
+                                slashExtraDecoding: this.slashExtraDecoding
                             };
                             registration.active.postMessage({
                                 type: 'CONFIGURE',
                                 data: config
                             });
-                            console.log(`[SW] Restored config for port ${port}:`, config);
+                            this.swConfiguredPorts.add(port);
                         }
                     }
                 }
@@ -306,7 +356,7 @@ class PortApp {
              activeElement.tagName === 'INPUT');
 
         if (isInteracting) {
-            console.log('[Display] Skipped: user is interacting with', activeElement.tagName);
+            // 跳过更新，避免打断用户操作
             return;
         }
 
@@ -521,6 +571,7 @@ class PortApp {
                 <option value="none" ${currentMode === 'none' ? 'selected' : ''}>None</option>
                 <option value="subpath" ${currentMode === 'subpath' ? 'selected' : ''}>Subpath</option>
                 <option value="tunnel" ${currentMode === 'tunnel' ? 'selected' : ''}>Tunnel</option>
+                <option value="hybrid" ${currentMode === 'hybrid' ? 'selected' : ''}>Hybrid</option>
             </select>
         `;
     }
@@ -598,6 +649,9 @@ class PortApp {
         this.setLoadingState(port, true);
 
         try {
+            // 清除配置标记，允许重新配置
+            this.swConfiguredPorts.delete(port);
+            
             if (newMode === 'none') {
                 // 切换到 none：发送 none 配置
                 this.clearPortStrategy(port);
@@ -605,40 +659,41 @@ class PortApp {
                 if (swState && swState.registration && swState.registration.active) {
                     swState.registration.active.postMessage({
                         type: 'CONFIGURE',
-                        data: { strategy: 'none', decodeDepth: 0 }
+                        data: { strategy: 'none', decodeDepth: 0, slashExtraDecoding: false }
                     });
-                    console.log(`[Mode Switch] Sent none config to SW for port ${port}`);
                 }
             } else {
-                // 切换到 subpath 或 tunnel
+                // 切换到 subpath、tunnel 或 hybrid
                 this.updatePortStrategy(port, newMode);
                 
                 const swState = this.serviceWorkerStates.get(port);
                 if (swState && swState.registered && swState.registration && swState.registration.active) {
                     // 已注册：发送新配置
                     const config = {
-                        strategy: newMode === 'tunnel' ? 'tunnel' : 'subpath',
-                        decodeDepth: this.nginxDecodeDepth
+                        strategy: newMode === 'tunnel' ? 'tunnel' : 
+                                  newMode === 'hybrid' ? 'hybrid' : 'subpath',
+                        decodeDepth: this.nginxDecodeDepth,
+                        slashExtraDecoding: this.slashExtraDecoding
                     };
                     swState.registration.active.postMessage({
                         type: 'CONFIGURE',
                         data: config
                     });
-                    console.log(`[Mode Switch] Sent config to SW for port ${port}:`, config);
                 } else {
                     // 未注册：先注册，再发送配置
                     await this.registerPortServiceWorker(port);
                     const swState = this.serviceWorkerStates.get(port);
                     if (swState && swState.registration && swState.registration.active) {
                         const config = {
-                            strategy: newMode === 'tunnel' ? 'tunnel' : 'subpath',
-                            decodeDepth: this.nginxDecodeDepth
+                            strategy: newMode === 'tunnel' ? 'tunnel' : 
+                                      newMode === 'hybrid' ? 'hybrid' : 'subpath',
+                            decodeDepth: this.nginxDecodeDepth,
+                            slashExtraDecoding: this.slashExtraDecoding
                         };
                         swState.registration.active.postMessage({
                             type: 'CONFIGURE',
                             data: config
                         });
-                        console.log(`[Mode Switch] Registered and sent config to SW for port ${port}:`, config);
                     }
                 }
             }
@@ -693,8 +748,6 @@ class PortApp {
                 registration: registration,
                 state: 'active'
             });
-            
-            console.log(`[SW] Registered for port ${port} with default strategy: none`);
         } catch (error) {
             console.error(`[SW Register] Failed for port ${port}:`, error);
             throw error;
@@ -735,12 +788,12 @@ class PortApp {
             // 3. 清理前端状态
             this.clearPortStrategy(port);
             this.serviceWorkerStates.delete(port);
+            this.swConfiguredPorts.delete(port);
             
             // 4. 删除后端缓存
             await fetch(`${this.basePath}/api/port/${port}`, {
                 method: 'DELETE'
             });
-            console.log(`[Stop Forwarding] Deleted port ${port} from backend`);
             
         } catch (error) {
             console.error(`[Stop Forwarding] Failed for port ${port}:`, error);

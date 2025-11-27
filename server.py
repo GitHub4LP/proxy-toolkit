@@ -133,10 +133,18 @@ class PortServer:
         })
 
     async def test_encoding_handler(self, request):
-        """nginx解码深度检测端点 - 返回nginx解码后的路径"""
-        match_path = request.match_info.get("path", "")
-        restored_path = urllib.parse.quote(match_path, safe='')
-        return web.json_response({"path": restored_path})
+        """nginx解码深度检测端点 - 返回 raw_path（原始请求路径）"""
+        # 使用 raw_path 获取原始路径
+        raw_path = request.raw_path.decode('utf-8') if isinstance(request.raw_path, bytes) else request.raw_path
+        
+        # 提取测试路径部分
+        prefix = "/api/test-encoding/"
+        if raw_path.startswith(prefix):
+            test_path = raw_path[len(prefix):]
+        else:
+            test_path = ""
+        
+        return web.json_response({"path": test_path})
 
     async def unified_service_worker_handler(self, request):
         """提供统一的Service Worker脚本"""

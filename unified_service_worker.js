@@ -6,8 +6,7 @@ const scope = new URL(self.registration.scope).pathname;
 // 默认策略：none（不处理任何请求）
 let strategy = 'none';
 let decodeDepth = 0;
-
-console.log(`[SW] Initialized with default strategy: ${strategy}`);
+let slashExtraDecoding = false;
 
 // 工具函数
 
@@ -213,8 +212,6 @@ self.addEventListener('install', (event) => {
         (async () => {
             try {
                 const interceptorUrl = new URL('./navigation_interceptor.js', scriptUrl.href).href;
-                console.log(`[SW] Loading interceptor from:`, interceptorUrl);
-                
                 const response = await fetch(interceptorUrl);
                 if (response.ok) {
                     NAVIGATION_INTERCEPTOR_CONTENT = await response.text();
@@ -239,26 +236,27 @@ self.addEventListener('message', (event) => {
         // 配置 SW 策略
         const oldStrategy = strategy;
         const oldDepth = decodeDepth;
+        const oldSlashExtra = slashExtraDecoding;
         const newStrategy = event.data.data.strategy || 'none';
         const newDepth = event.data.data.decodeDepth || 0;
+        const newSlashExtra = event.data.data.slashExtraDecoding || false;
         
         // 检查策略是否真的改变了
-        if (oldStrategy === newStrategy && oldDepth === newDepth) {
-            console.log(`[SW] Strategy unchanged: ${strategy}, depth: ${decodeDepth}`);
+        if (oldStrategy === newStrategy && oldDepth === newDepth && oldSlashExtra === newSlashExtra) {
+            // 策略未改变，静默返回
             return;
         }
         
         // 更新策略
         strategy = newStrategy;
         decodeDepth = newDepth;
-        console.log(`[SW] Strategy updated: ${oldStrategy} -> ${strategy}, depth: ${oldDepth} -> ${decodeDepth}`);
+        slashExtraDecoding = newSlashExtra;
         
         // 策略变更后自动刷新所有客户端
         self.clients.matchAll({
             includeUncontrolled: true,
             type: 'window'
         }).then(clients => {
-            console.log(`[SW] Refreshing ${clients.length} client(s) after strategy change`);
             clients.forEach(client => {
                 client.navigate(client.url).catch(() => {});
             });
@@ -308,6 +306,18 @@ self.addEventListener('fetch', event => {
         TunnelHandler.handleFetch(event);
     } else if (strategy === 'subpath') {
         SubpathHandler.handleFetch(event);
+    } else if (strategy === 'hybrid') {
+        // Hybrid 策略：智能路由
+        const url = new URL(event.request.url);
+        const pathname = url.pathname;
+        
+        // 只有当检测到 %2F 被额外解码，且路径包含 %2F 时，才走 tunnel
+        if (slashExtraDecoding && /%2F/i.test(pathname)) {
+            console.log(`[SW Hybrid] %2F detected, using tunnel: ${pathname}`);
+            TunnelHandler.handleFetch(event);
+        } else {
+            SubpathHandler.handleFetch(event);
+        }
     }
 });
 
