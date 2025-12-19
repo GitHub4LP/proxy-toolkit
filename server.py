@@ -65,6 +65,7 @@ class PortServer:
         """设置路由"""
         self.app.router.add_get("/", self.index_handler)
         self.app.router.add_get("/api/port/{port}", self.port_info_handler)
+        self.app.router.add_post("/api/ports/batch", self.batch_ports_handler)
         self.app.router.add_get("/api/url-template", self.url_template_handler)
         self.app.router.add_get("/api/test-encoding/{path:.*}", self.test_encoding_handler)
         # 路径模式隧道（保持方法与体，端口在路径，余路径在参数 u）
@@ -105,6 +106,35 @@ class PortServer:
         port_info = self.port_cache[port]
         self._update_port_info(port_info)
         return web.json_response(port_info.to_dict())
+
+    async def batch_ports_handler(self, request):
+        """批量查询端口信息"""
+        try:
+            data = await request.json()
+            ports = data.get("ports", [])
+        except Exception:
+            return web.json_response({"error": "无效的请求体"}, status=400)
+
+        if not isinstance(ports, list):
+            return web.json_response({"error": "ports 必须是数组"}, status=400)
+
+        results = []
+        for port in ports:
+            try:
+                port = int(port)
+                if port < 1 or port > 65535:
+                    continue
+            except (ValueError, TypeError):
+                continue
+
+            if port not in self.port_cache:
+                self.port_cache[port] = PortInfo(port)
+
+            port_info = self.port_cache[port]
+            self._update_port_info(port_info)
+            results.append(port_info.to_dict())
+
+        return web.json_response(results)
 
 
 
