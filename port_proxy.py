@@ -127,8 +127,21 @@ class AIStudioConfigManager:
             print(f"更新AI Studio配置失败: {e}")
 
 
-def detect_service_config() -> str:
-    """检测服务配置，返回子路径最短的URL模板"""
+# 缓存检测结果
+_cached_service_config: str | None = None
+
+
+def detect_service_config(use_cache: bool = True) -> str:
+    """检测服务配置，返回子路径最短的URL模板
+    
+    Args:
+        use_cache: 是否使用缓存，默认True。首次调用会执行检测并缓存结果。
+    """
+    global _cached_service_config
+    
+    if use_cache and _cached_service_config is not None:
+        return _cached_service_config
+    
     url_templates: list[str] = []
 
     # 服务检测配置
@@ -178,13 +191,19 @@ def detect_service_config() -> str:
                 path_segments = [seg for seg in parsed_path.split("/") if seg]
                 return len(path_segments)
 
-            return min(url_templates, key=get_path_length)
+            result = min(url_templates, key=get_path_length)
         else:
-            return ""
+            result = ""
 
     except ImportError:
         print("psutil不可用，使用默认配置")
-        return ""
+        result = ""
+    
+    # 缓存结果
+    if use_cache:
+        _cached_service_config = result
+    
+    return result
 
 
 def generate_proxy_url(port: int) -> str:

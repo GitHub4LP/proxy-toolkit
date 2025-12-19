@@ -4,7 +4,7 @@ class PortApp {
         this.basePath = window.location.pathname.replace(/\/$/, '');
         this.serviceWorkerStates = new Map();
         this.portStrategies = new Map();
-        this.nginxDecodeDepth = 0;
+        this.proxyDecodeDepth = 0;  // 反向代理层解码深度
         this.slashExtraDecoding = false;
         this.swConfiguredPorts = new Set(); // 记录已配置的端口
         this.deletingPorts = new Set(); // 记录正在删除的端口
@@ -27,7 +27,7 @@ class PortApp {
     async initializeApp() {
         await this.loadUrlTemplate();
         if (this.hasProxySupport) {
-            await this.detectNginxEncoding();
+            await this.detectProxyEncoding();
             await this.detectSlashExtraDecoding();
         }
         this.setupPortInput(); // Call this after DOM is ready usually, but here is fine
@@ -98,7 +98,7 @@ class PortApp {
         }
     }
 
-    async detectNginxEncoding() {
+    async detectProxyEncoding() {
         try {
             // 使用包含空格的测试字符串（空格会被编码为 %20，不会像 %2F 那样被特殊处理）
             const testSegment = "test path";
@@ -114,7 +114,7 @@ class PortApp {
 
                 const response = await fetch(`${this.basePath}/api/test-encoding/${encodedSegment}`);
                 if (!response.ok) {
-                    this.nginxDecodeDepth = 0;
+                    this.proxyDecodeDepth = 0;
                     break;
                 }
 
@@ -128,17 +128,17 @@ class PortApp {
                 }
 
                 const detectedDepth = (current === encodedSegment) ? encodeSteps : 0;
-                const verified = await this.verifyNginxDecodeDepth(baseEncoded, detectedDepth);
+                const verified = await this.verifyProxyDecodeDepth(baseEncoded, detectedDepth);
 
                 if (verified) {
-                    this.nginxDecodeDepth = detectedDepth;
+                    this.proxyDecodeDepth = detectedDepth;
                     return;
                 }
                 maxLayers++;
             }
-            this.nginxDecodeDepth = 0;
+            this.proxyDecodeDepth = 0;
         } catch {
-            this.nginxDecodeDepth = 0;
+            this.proxyDecodeDepth = 0;
         }
     }
 
@@ -150,7 +150,7 @@ class PortApp {
             
             // 根据基准深度编码
             let encoded = baseEncoded;
-            for (let i = 0; i < this.nginxDecodeDepth; i++) {
+            for (let i = 0; i < this.proxyDecodeDepth; i++) {
                 encoded = encodeURIComponent(encoded);
             }
 
@@ -178,14 +178,14 @@ class PortApp {
             }
             
             // 合并输出检测结果
-            console.log(`[Encoding Detection] depth: ${this.nginxDecodeDepth}, %2F extra decoding: ${this.slashExtraDecoding}`);
+            console.log(`[Encoding Detection] depth: ${this.proxyDecodeDepth}, %2F extra decoding: ${this.slashExtraDecoding}`);
         } catch (error) {
             console.warn('[Encoding Detection] Slash detection failed:', error);
             this.slashExtraDecoding = false;
         }
     }
 
-    async verifyNginxDecodeDepth(baseEncoded, detectedDepth) {
+    async verifyProxyDecodeDepth(baseEncoded, detectedDepth) {
         try {
             let verifySegment = baseEncoded;
             for (let i = 0; i < detectedDepth; i++) {
@@ -279,7 +279,7 @@ class PortApp {
                             const config = {
                                 strategy: savedStrategy === 'tunnel' ? 'tunnel' : 
                                           savedStrategy === 'hybrid' ? 'hybrid' : 'subpath',
-                                decodeDepth: this.nginxDecodeDepth,
+                                decodeDepth: this.proxyDecodeDepth,
                                 slashExtraDecoding: this.slashExtraDecoding
                             };
                             registration.active.postMessage({
@@ -667,7 +667,7 @@ class PortApp {
                     const config = {
                         strategy: newMode === 'tunnel' ? 'tunnel' : 
                                   newMode === 'hybrid' ? 'hybrid' : 'subpath',
-                        decodeDepth: this.nginxDecodeDepth,
+                        decodeDepth: this.proxyDecodeDepth,
                         slashExtraDecoding: this.slashExtraDecoding
                     };
                     swState.registration.active.postMessage({
@@ -682,7 +682,7 @@ class PortApp {
                         const config = {
                             strategy: newMode === 'tunnel' ? 'tunnel' : 
                                       newMode === 'hybrid' ? 'hybrid' : 'subpath',
-                            decodeDepth: this.nginxDecodeDepth,
+                            decodeDepth: this.proxyDecodeDepth,
                             slashExtraDecoding: this.slashExtraDecoding
                         };
                         swState.registration.active.postMessage({

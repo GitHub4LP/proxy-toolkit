@@ -57,6 +57,8 @@ class PortServer:
         self.port_cache: OrderedDict[int, PortInfo] = OrderedDict()
         self.cache_max_size = 100
         self.proxy_template = detect_service_config()
+        # 复用的 HTTP 隧道 Session（延迟初始化）
+        self._tunnel_session = None
         self._setup_routes()
 
     def _setup_routes(self):
@@ -115,7 +117,7 @@ class PortServer:
         })
 
     async def test_encoding_handler(self, request):
-        """nginx解码深度检测端点 - 返回 raw_path（原始请求路径）"""
+        """反向代理解码深度检测端点 - 返回 raw_path（原始请求路径）"""
         # 使用 raw_path 获取原始路径
         raw_path = request.raw_path.decode('utf-8') if isinstance(request.raw_path, bytes) else request.raw_path
         
@@ -166,6 +168,14 @@ class PortServer:
 
 
 
+    async def _get_tunnel_session(self):
+        """获取或创建复用的隧道 Session"""
+        import aiohttp
+        if self._tunnel_session is None or self._tunnel_session.closed:
+            timeout = aiohttp.ClientTimeout(total=30)
+            self._tunnel_session = aiohttp.ClientSession(timeout=timeout, auto_decompress=False)
+        return self._tunnel_session
+
     async def http_tunnel_handler(self, request):
         """HTTP隧道处理器（路径模式） - 保持方法与体，端口在路径，目标余路径在参数u"""
         try:
@@ -182,9 +192,6 @@ class PortServer:
                 return web.Response(text="缺少或非法参数u", status=400)
 
             target_url = f"http://localhost:{port}{u}"
-
-            import aiohttp
-            timeout = aiohttp.ClientTimeout(total=30)
 
             # 过滤可能导致问题的头
             skip_headers = {
@@ -208,40 +215,39 @@ class PortServer:
                 except Exception:
                     body = None
 
+            session = await self._get_tunnel_session()
+            try:
+                async with session.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=clean_headers,
+                    data=body,
+                    allow_redirects=False
+                ) as upstream:
+                    # 过滤响应中的 hop-by-hop 和长度相关头，由服务器按实际写入决定
+                    resp_headers = dict(upstream.headers)
+                    for hk in ('transfer-encoding', 'connection', 'content-length'):
+                        resp_headers.pop(hk, None)
 
-
-            async with aiohttp.ClientSession(timeout=timeout, auto_decompress=False) as session:
-                try:
-                    async with session.request(
-                        method=request.method,
-                        url=target_url,
-                        headers=clean_headers,
-                        data=body,
-                        allow_redirects=False
-                    ) as upstream:
-                        # 过滤响应中的 hop-by-hop 和长度相关头，由服务器按实际写入决定
-                        resp_headers = dict(upstream.headers)
-                        for hk in ('transfer-encoding', 'connection', 'content-length'):
-                            resp_headers.pop(hk, None)
-
-
-
-                        # 流式透传上游响应
-                        stream_resp = web.StreamResponse(
-                            status=upstream.status,
-                            reason=upstream.reason or ''
-                        )
-                        for k, v in resp_headers.items():
-                            stream_resp.headers[k] = v
-                        await stream_resp.prepare(request)
-                        async for chunk in upstream.content.iter_chunked(65536):
-                            await stream_resp.write(chunk)
-                        await stream_resp.write_eof()
-                        return stream_resp
-                except aiohttp.ClientError as e:
+                    # 流式透传上游响应
+                    stream_resp = web.StreamResponse(
+                        status=upstream.status,
+                        reason=upstream.reason or ''
+                    )
+                    for k, v in resp_headers.items():
+                        stream_resp.headers[k] = v
+                    await stream_resp.prepare(request)
+                    async for chunk in upstream.content.iter_chunked(65536):
+                        await stream_resp.write(chunk)
+                    await stream_resp.write_eof()
+                    return stream_resp
+            except Exception as e:
+                import aiohttp
+                if isinstance(e, aiohttp.ClientError):
                     return web.Response(text=f"请求转发失败: {e}", status=502)
-                except asyncio.TimeoutError:
+                elif isinstance(e, asyncio.TimeoutError):
                     return web.Response(text="请求超时", status=504)
+                raise
 
         except Exception as e:
             print(f"[路径隧道错误] {e}")
@@ -340,6 +346,8 @@ class PortServer:
 
     async def stop_server(self, runner):
         """停止服务器"""
+        if self._tunnel_session and not self._tunnel_session.closed:
+            await self._tunnel_session.close()
         await runner.cleanup()
 
 

@@ -172,7 +172,7 @@ const TunnelHandler = {
             }
         }
 
-        // 构造路径隧道 URL（暂不考虑 nginx 对参数的解码）
+        // 构造路径隧道 URL（暂不考虑反向代理层对参数的解码）
         const apiBase = scriptUrl.origin + scriptPath + `/api/http-tunnel/${port}`;
         const uParam = encodeURIComponent(remainder + url.search);
         const proxyUrl = `${apiBase}?u=${uParam}`;
