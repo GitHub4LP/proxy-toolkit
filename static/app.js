@@ -1,4 +1,6 @@
 // Port management service frontend app
+// 依赖: sw_client.js (需要在 HTML 中先加载)
+
 class PortApp {
     constructor() {
         this.basePath = window.location.pathname.replace(/\/$/, '');
@@ -13,7 +15,7 @@ class PortApp {
         this.swConfiguredPorts = new Set();
         this.deletingPorts = new Set();
         
-        // 代理检测
+        // 代理检测结果
         this.proxyDecodeDepth = 0;
         this.slashExtraDecoding = false;
 
@@ -64,8 +66,7 @@ class PortApp {
     async initializeApp() {
         await this.loadUrlTemplate();
         if (this.hasProxySupport) {
-            await this.detectProxyEncoding();
-            await this.detectSlashExtraDecoding();
+            await this.detectEncoding();
         }
         this.setupPortInput();
         await this.syncServiceWorkers();
@@ -79,7 +80,7 @@ class PortApp {
             this.urlTemplate = data.template;
             this.hasProxySupport = data.has_proxy_support;
             if (this.urlTemplate) {
-                this.templateRegex = this.compileTemplateRegex(this.urlTemplate);
+                this.templateRegex = SwClient.compileTemplateRegex(this.urlTemplate);
             }
             this.swEnabled = this.swSupported && this.isSubpath && this.hasProxySupport;
         } catch (error) {
@@ -88,6 +89,14 @@ class PortApp {
             this.hasProxySupport = false;
             this.swEnabled = false;
         }
+    }
+
+    async detectEncoding() {
+        // 使用 sw_client.js 的编码检测
+        const testEndpoint = `${this.basePath}/api/test-encoding`;
+        const result = await SwClient.detectProxyEncoding(testEndpoint);
+        this.proxyDecodeDepth = result.decodeDepth;
+        this.slashExtraDecoding = result.slashExtraDecoding;
     }
 
     initServiceWorkerSupport() {
@@ -119,126 +128,10 @@ class PortApp {
         });
     }
 
-    // ==================== 代理编码检测 ====================
-
-    async detectProxyEncoding() {
-        try {
-            const testSegment = "test path";
-            let maxLayers = 4;
-            const maxAttempts = 8;
-            const baseEncoded = encodeURIComponent(testSegment);
-
-            while (maxLayers <= maxAttempts) {
-                let encodedSegment = baseEncoded;
-                for (let i = 0; i < maxLayers; i++) {
-                    encodedSegment = encodeURIComponent(encodedSegment);
-                }
-
-                const response = await fetch(`${this.basePath}/api/test-encoding/${encodedSegment}`);
-                if (!response.ok) {
-                    this.proxyDecodeDepth = 0;
-                    break;
-                }
-
-                const result = await response.json();
-                let current = result.path;
-                let encodeSteps = 0;
-
-                while (current !== encodedSegment && encodeSteps < maxLayers) {
-                    current = encodeURIComponent(current);
-                    encodeSteps++;
-                }
-
-                const detectedDepth = (current === encodedSegment) ? encodeSteps : 0;
-                const verified = await this.verifyProxyDecodeDepth(baseEncoded, detectedDepth);
-
-                if (verified) {
-                    this.proxyDecodeDepth = detectedDepth;
-                    return;
-                }
-                maxLayers++;
-            }
-            this.proxyDecodeDepth = 0;
-        } catch {
-            this.proxyDecodeDepth = 0;
-        }
-    }
-
-    async detectSlashExtraDecoding() {
-        try {
-            const testSegment = "test/path";
-            const baseEncoded = encodeURIComponent(testSegment);
-            
-            let encoded = baseEncoded;
-            for (let i = 0; i < this.proxyDecodeDepth; i++) {
-                encoded = encodeURIComponent(encoded);
-            }
-
-            const response = await fetch(`${this.basePath}/api/test-encoding/${encoded}`);
-            if (!response.ok) {
-                this.slashExtraDecoding = false;
-                return;
-            }
-
-            const result = await response.json();
-            const pathParts = result.path.split('/');
-            const hasRealSlash = pathParts.filter(p => p !== '').length > 1;
-            this.slashExtraDecoding = hasRealSlash;
-            
-            console.log(`[Encoding Detection] depth: ${this.proxyDecodeDepth}, %2F extra decoding: ${this.slashExtraDecoding}`);
-        } catch (error) {
-            console.warn('[Encoding Detection] Slash detection failed:', error);
-            this.slashExtraDecoding = false;
-        }
-    }
-
-    async verifyProxyDecodeDepth(baseEncoded, detectedDepth) {
-        try {
-            let verifySegment = baseEncoded;
-            for (let i = 0; i < detectedDepth; i++) {
-                verifySegment = encodeURIComponent(verifySegment);
-            }
-            const verifyResponse = await fetch(`${this.basePath}/api/test-encoding/${verifySegment}`);
-            if (verifyResponse.ok) {
-                const verifyResult = await verifyResponse.json();
-                return verifyResult.path === baseEncoded;
-            }
-            return false;
-        } catch {
-            return false;
-        }
-    }
-
     // ==================== URL 模板处理 ====================
 
-    compileTemplateRegex(template) {
-        const templatePath = this.extractTemplatePathManually(template);
-        const escaped = templatePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const pattern = escaped.replace('\\{\\{port\\}\\}', '(\\d+)');
-        return new RegExp(pattern);
-    }
-
-    extractTemplatePathManually(template) {
-        if (template.startsWith('http://') || template.startsWith('https://')) {
-            const protocolEnd = template.indexOf('://') + 3;
-            const hostEnd = template.indexOf('/', protocolEnd);
-            return hostEnd !== -1 ? template.substring(hostEnd) : '/';
-        }
-        return template.startsWith('/') ? template : '/' + template;
-    }
-
-    normalizeUrl(url) {
-        try {
-            if (url.startsWith('http')) return new URL(url).pathname;
-            return url.startsWith('/') ? url : '/' + url;
-        } catch {
-            return url;
-        }
-    }
-
     generateProxyUrlForPort(port) {
-        if (!this.urlTemplate) return null;
-        return this.urlTemplate.replace('{{port}}', port.toString());
+        return SwClient.generateProxyUrl(this.urlTemplate, port);
     }
 
     getAbsoluteUrl(url) {
@@ -264,7 +157,7 @@ class PortApp {
 
     extractPortFromScope(scope) {
         if (!this.templateRegex) return null;
-        const normalizedScope = this.normalizeUrl(scope);
+        const normalizedScope = SwClient.normalizeUrl(scope);
         const match = normalizedScope.match(this.templateRegex);
         return (match && match[1]) ? parseInt(match[1]) : null;
     }
@@ -273,7 +166,8 @@ class PortApp {
         if (!('serviceWorker' in navigator) || !this.hasProxySupport) return;
 
         try {
-            const registrations = await navigator.serviceWorker.getRegistrations();
+            // 使用 sw_client.js 获取注册列表
+            const registrations = await SwClient.getRegistrations();
             const foundPorts = new Set();
 
             for (const registration of registrations) {
@@ -297,7 +191,7 @@ class PortApp {
                     this.serviceWorkerStates.set(port, {
                         registered: true,
                         loading: false,
-                        scope: this.normalizeUrl(registration.scope),
+                        scope: SwClient.normalizeUrl(registration.scope),
                         registration: registration,
                         state: state
                     });
@@ -326,12 +220,12 @@ class PortApp {
     }
 
     sendSwConfig(worker, strategy) {
-        const config = {
+        // 使用 sw_client.js 配置 SW
+        SwClient.configureServiceWorker(worker, {
             strategy: strategy,
             decodeDepth: this.proxyDecodeDepth,
             slashExtraDecoding: this.slashExtraDecoding
-        };
-        worker.postMessage({ type: 'CONFIGURE', data: config });
+        });
     }
 
     async registerPortServiceWorker(port) {
@@ -346,10 +240,8 @@ class PortApp {
         const swScriptPath = `${this.basePath}/unified_service_worker.js`;
 
         try {
-            const registration = await navigator.serviceWorker.register(swScriptPath, { scope });
-            if (registration.installing) {
-                await this.waitForServiceWorkerActivation(registration.installing);
-            }
+            // 使用 sw_client.js 注册 SW
+            const registration = await SwClient.registerServiceWorker(swScriptPath, scope);
 
             this.serviceWorkerStates.set(port, {
                 registered: true,
@@ -364,25 +256,9 @@ class PortApp {
         }
     }
 
-    async waitForServiceWorkerActivation(installingWorker) {
-        return Promise.race([
-            new Promise(resolve => {
-                installingWorker.addEventListener('statechange', () => {
-                    if (installingWorker.state === 'activated' || installingWorker.state === 'redundant') resolve();
-                });
-            }),
-            new Promise(resolve => setTimeout(resolve, 5000))
-        ]);
-    }
-
     async unregisterServiceWorker(scope) {
-        try {
-            const registrations = await navigator.serviceWorker.getRegistrations();
-            const target = registrations.find(reg => this.normalizeUrl(reg.scope) === this.normalizeUrl(scope));
-            if (target) {
-                await target.unregister();
-            }
-        } catch { }
+        // 使用 sw_client.js 注销 SW
+        await SwClient.unregisterServiceWorker(scope);
     }
 
     // ==================== 策略管理 ====================
@@ -489,9 +365,10 @@ class PortApp {
                 this.clearPortStrategy(port);
                 const swState = this.serviceWorkerStates.get(port);
                 if (swState?.registration?.active) {
-                    swState.registration.active.postMessage({
-                        type: 'CONFIGURE',
-                        data: { strategy: 'none', decodeDepth: 0, slashExtraDecoding: false }
+                    SwClient.configureServiceWorker(swState.registration.active, {
+                        strategy: 'none',
+                        decodeDepth: 0,
+                        slashExtraDecoding: false
                     });
                 }
             } else {

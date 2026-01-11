@@ -1,0 +1,11 @@
+/* Proxy Toolkit Extension Styles */
+
+.jp-proxy-toolkit-widget {
+  background: var(--jp-layout-color1);
+}
+
+.jp-proxy-toolkit-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+}

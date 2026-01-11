@@ -1,0 +1,84 @@
+{
+  "name": "vscode-proxy-toolkit",
+  "displayName": "Proxy Toolkit",
+  "description": "Service Worker based URL rewriting for subpath proxy environments",
+  "version": "0.0.1",
+  "publisher": "proxy-toolkit",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/proxy-toolkit/vscode-proxy-toolkit"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "proxy-toolkit.enableSubpath",
+        "title": "Enable Subpath Mode",
+        "category": "Proxy Toolkit"
+      },
+      {
+        "command": "proxy-toolkit.enableTunnel",
+        "title": "Enable Tunnel Mode",
+        "category": "Proxy Toolkit"
+      },
+      {
+        "command": "proxy-toolkit.enableHybrid",
+        "title": "Enable Hybrid Mode",
+        "category": "Proxy Toolkit"
+      },
+      {
+        "command": "proxy-toolkit.disable",
+        "title": "Disable Proxy",
+        "category": "Proxy Toolkit"
+      }
+    ],
+    "menus": {
+      "ports/item/context": [
+        {
+          "command": "proxy-toolkit.enableSubpath",
+          "group": "proxy-toolkit@1",
+          "when": "proxyToolkit.enabled"
+        },
+        {
+          "command": "proxy-toolkit.enableTunnel",
+          "group": "proxy-toolkit@2",
+          "when": "proxyToolkit.enabled"
+        },
+        {
+          "command": "proxy-toolkit.enableHybrid",
+          "group": "proxy-toolkit@3",
+          "when": "proxyToolkit.enabled"
+        },
+        {
+          "command": "proxy-toolkit.disable",
+          "group": "proxy-toolkit@4",
+          "when": "proxyToolkit.enabled"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "prebuild": "node scripts/copy-sw-files.js",
+    "build": "npm run prebuild && esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "npm run prebuild && esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --watch",
+    "package": "npm run build && vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.3.0"
+  }
+}

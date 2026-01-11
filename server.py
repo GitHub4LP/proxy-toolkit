@@ -73,6 +73,7 @@ class PortServer:
         # Service Worker 脚本 - 放在根路径以获得最大作用域
         self.app.router.add_get("/unified_service_worker.js", self.unified_service_worker_handler)
         self.app.router.add_get("/navigation_interceptor.js", self.navigation_interceptor_handler)
+        self.app.router.add_get("/sw_client.js", self.sw_client_handler)
 
         # 静态文件
         static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -195,6 +196,24 @@ class PortServer:
             )
         except FileNotFoundError:
             return web.Response(text="导航拦截器脚本未找到", status=404)
+
+    async def sw_client_handler(self, request):
+        """提供 SW 客户端工具库"""
+        try:
+            script_file = os.path.join(os.path.dirname(__file__), "sw_client.js")
+            with open(script_file, "r", encoding="utf-8") as f:
+                content = f.read()
+            
+            return web.Response(
+                text=content,
+                content_type="application/javascript",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Access-Control-Allow-Origin": "*"
+                }
+            )
+        except FileNotFoundError:
+            return web.Response(text="SW客户端工具库未找到", status=404)
 
 
 

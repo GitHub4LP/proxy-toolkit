@@ -1,162 +1,243 @@
-# 端口管理服务 (Proxy Toolkit)
+# Browser Proxy Toolkit
 
-一个面向子路径代理环境的端口访问与导航修复工具，自动探测平台代理模板、生成端口代理链接，并提供统一的 Service Worker（子路径修复或 HTTP 隧道）以提升在 JupyterLab、Code Server、AI Studio 等环境下的可用性。
+通过 Service Worker 拦截和重写请求 URL，解决 Web 应用在子路径反向代理环境下的资源加载问题。支持三种部署场景：独立 Web 版、JupyterLab 扩展、VS Code/Code Server 扩展。
 
 ## 核心特性
 
+### 🔧 Service Worker URL 重写
+- **四种策略**：None / Subpath / Tunnel / Hybrid
+- **动态配置**：通过 `postMessage` 实时切换策略
+- **导航拦截**：自动注入脚本修复链接点击、history API、表单提交
+
 ### 🔍 智能环境检测
-- 自动识别运行环境：JupyterLab、Code Server、AI Studio
-- 代理URL模板生成：返回最短子路径模板（如 `/proxy/{{port}}/` 或平台变量拼接）
-- 解码深度检测：前端探测多层反向代理对路径的解码深度（用于子路径策略编码补偿）
+- 自动识别：JupyterLab、Code Server、AI Studio
+- 代理模板生成：返回最短子路径模板
+- 编码深度检测：探测反向代理的解码行为
 
-### 🖥️ 端口监控管理
-- 实时检测端口监听状态（TCP connect_ex）
-- 展示进程信息（PID、完整命令行）
-- 智能增量更新：只更新变化的端口，保护用户交互
-- 数据源：SW registrations（浏览器持久化）
-- 后端 LRU 缓存：自动淘汰不常用端口
+### 📦 三种部署场景
+| 场景 | 后端 | SW 脚本提供 | 用户界面 |
+|-----|------|------------|---------|
+| 独立 Web 版 | Python (aiohttp) | HTTP 服务 | 端口管理界面 |
+| JupyterLab 扩展 | Python (jupyter-server-proxy) | HTTP 服务 | IFrame 嵌入 |
+| VS Code 扩展 | Node.js | 内嵌 HTTP 服务 | 端口面板右键菜单 |
 
-### 🔧 统一Service Worker（动态配置）
-- **动态策略切换**：通过 `postMessage` 实时配置策略
-- **四种模式**：
-  - None：不处理任何请求（默认）
-  - Subpath：修正请求路径前缀与多层编码错位
-  - Tunnel：改写请求到后端 HTTP 隧道透传
-  - Hybrid：智能混合（大部分走 Subpath，包含 `%2F` 的走 Tunnel）
-- **导航拦截器**：自动注入脚本，修复子路径环境下的导航行为
-- **自动注册**：添加端口时自动注册 SW
-
-## 项目架构
-
-### 核心模块
-
-#### 1. server.py — 主服务（aiohttp）
-- 路由：
-  - GET `/` 静态首页
-  - GET `/api/port/{port}` 单端口查询（LRU 缓存，最多 100 个）
-  - GET `/api/url-template` 环境 URL 模板
-  - GET `/api/test-encoding/{path:.*}` 原始路径（用于编码检测）
-  - ANY `/api/http-tunnel/{port}` HTTP 隧道透传
-  - GET `/unified_service_worker.js` 统一 SW 脚本
-  - GET `/navigation_interceptor.js` 导航拦截器
-  - `/static/*` 静态资源
-- 端口与进程：psutil.net_connections 定位进程，返回 PID/名称/完整 cmdline
-- LRU 缓存：自动淘汰不常用端口，无需显式删除
-- 启动条件：仅在检测到子路径环境时启动
-
-#### 2. port_proxy.py — 环境检测与模板生成
-- JupyterLab：枚举运行中的服务器，返回 `base_url + proxy/{{port}}/`
-- Code Server：读取环境变量 `VSCODE_PROXY_URI`
-- AI Studio：拼接 `STUDIO_MODEL_API_URL_PREFIX + JUPYTERHUB_SERVICE_PREFIX + gradio/{{port}}/`
-- detect_service_config：识别服务类型，返回路径段数最短的模板
-- generate_proxy_url(port)：用模板替换 `{{port}}`
-
-#### 3. main.gradio.py — Gradio环境启动器
-- 自动安装依赖（aiohttp、jupyter-server、psutil、requests）
-- 以 `GRADIO_SERVER_PORT`（默认7860）启动 `PortServer`，不做子路径检查
-
-#### 4. 前端（static/）
-- **index.html / style.css**：VSCode 风格端口管理界面
-- **app.js**：
-  - 数据源：从 SW registrations 读取端口列表
-  - 智能增量更新：只更新变化的端口行，保护用户交互
-  - 编码检测：自动检测基准解码深度和 `%2F` 特殊解码
-  - 策略切换：通过 `postMessage` 动态配置 SW
-  - 快速删除：立即清理前端状态，异步注销 SW
-
-#### 5. 浏览器脚本
-- **unified_service_worker.js**：统一 SW 脚本
-  - 支持四种策略：None/Subpath/Tunnel/Hybrid
-  - 通过 `postMessage` 动态配置
-  - Hybrid 模式：根据路径内容智能路由
-  - 导航拦截器注入
-- **navigation_interceptor.js**：修正子路径导航行为
-
-## 关键算法
-
-### 反向代理解码深度检测
-```javascript
-// 1. 基准深度检测（使用空格，避免 %2F 干扰）
-const testSegment = "test path";  // → "test%20path"
-// 发送多层编码，通过反向编码计算反向代理层的解码深度
-
-// 2. %2F 特殊解码检测
-const testSegment = "test/path";  // → "test%2Fpath"
-// 如果后端返回 "test/path"（包含真实斜杠），说明某层代理对 %2F 做了额外解码
-```
-
-### 智能增量更新
-```javascript
-// 只更新变化的端口行，保护用户交互
-displayPorts(ports) {
-    // 检测用户是否正在操作
-    if (document.activeElement.tagName === 'SELECT') {
-        return; // 跳过更新，避免打断
-    }
-    
-    // 增量更新：只添加/删除/更新变化的行
-    allPorts.forEach(port => {
-        const existingRow = tbody.querySelector(`tr[data-port="${port.port}"]`);
-        if (!existingRow) {
-            tbody.appendChild(createRow(port)); // 新端口
-        } else {
-            updateRowIfNeeded(existingRow, port); // 只更新变化的单元格
-        }
-    });
-}
-```
-
-### Hybrid 策略智能路由
-```javascript
-// SW 中根据路径内容动态选择处理方式
-if (strategy === 'hybrid') {
-    if (slashExtraDecoding && /%2F/i.test(pathname)) {
-        TunnelHandler.handleFetch(event);  // 包含 %2F 走 Tunnel
-    } else {
-        SubpathHandler.handleFetch(event); // 其他走 Subpath
-    }
-}
-```
-
-## API接口
+## 项目结构
 
 ```
-GET     /                              # 主界面
-GET     /api/port/{port}               # 单端口信息（后端 LRU 缓存）
-GET     /api/url-template              # 代理模板与支持标记
-GET     /api/test-encoding/{path}      # 返回原始路径（用于编码检测）
-*       /api/http-tunnel/{port}?u=/... # HTTP 隧道透传
-GET     /unified_service_worker.js     # 统一 SW 脚本
-GET     /navigation_interceptor.js     # 导航拦截器
-GET     /static/*                      # 静态资源
+proxy-toolkit/
+├── 核心文件（单一来源）
+│   ├── unified_service_worker.js   # SW 核心脚本
+│   ├── navigation_interceptor.js   # 导航拦截器
+│   ├── sw_client.js                # 客户端工具库
+│   ├── port_proxy.py               # 环境检测
+│   ├── server.py                   # HTTP 服务
+│   └── LICENSE                     # MIT 许可证
+│
+├── 独立 Web 版
+│   ├── static/
+│   │   ├── index.html              # 端口管理界面
+│   │   ├── app.js                  # 前端逻辑
+│   │   └── style.css               # 样式
+│   └── main.gradio.py              # Gradio 环境启动器
+│
+├── JupyterLab 扩展
+│   └── jupyterlab-proxy-toolkit/
+│       ├── src/index.ts            # 扩展入口
+│       ├── scripts/copy-shared-files.js  # 构建时复制共用文件
+│       └── jupyterlab_proxy_toolkit/
+│           └── server/             # 构建时复制（.gitignore）
+│
+└── VS Code 扩展
+    └── vscode-proxy-toolkit/
+        ├── src/                    # TypeScript 源码
+        ├── scripts/copy-sw-files.js  # 构建时复制共用文件
+        └── resources/              # 构建时复制（.gitignore）
 ```
 
+## 共用文件策略
 
+采用**单一来源 + 构建时复制**：
+
+- 核心文件在根目录维护（Git 跟踪）
+- 各扩展构建时复制到各自目录
+- 复制的文件通过 `.gitignore` 忽略
+
+```
+构建时复制：
+├── JupyterLab: npm run prebuild → server/ 目录
+│   ├── JS 文件、Python 文件（自动修改 import）
+│   └── static/ 目录（自动修改路径引用）
+│
+└── VS Code: npm run prebuild → resources/ 目录
+    └── JS 文件
+```
+
+## 快速开始
+
+### 独立 Web 版
+
+```bash
+# 安装依赖（使用 uv）
+uv sync
+
+# 或使用 pip
+pip install -e .
+
+# 启动服务（仅在子路径环境下启动）
+python server.py --host 0.0.0.0 --port 3000
+
+# Gradio 环境
+python main.gradio.py
+```
+
+### JupyterLab 扩展
+
+```bash
+cd jupyterlab-proxy-toolkit
+
+# 安装依赖
+npm install
+pip install -e .
+
+# 构建
+npm run build:prod
+
+# 开发模式
+npm run build
+jupyter lab
+```
+
+**依赖**：需要安装 `jupyter-server-proxy`
+
+### VS Code 扩展
+
+```bash
+cd vscode-proxy-toolkit
+
+# 安装依赖
+npm install
+
+# 构建
+npm run build
+
+# 打包
+npm run package
+# 生成 vscode-proxy-toolkit-0.0.1.vsix
+```
+
+**启用条件**：
+- `VSCODE_PROXY_URI` 环境变量存在
+- 模板包含子路径（如 `/proxy/{{port}}/`）
+
+## API 接口
+
+```
+GET   /                              # 主界面
+GET   /api/url-template              # 代理模板
+GET   /api/test-encoding/{path}      # 编码检测
+GET   /api/port/{port}               # 端口信息
+POST  /api/ports/batch               # 批量查询
+*     /api/http-tunnel/{port}?u=/... # HTTP 隧道
+GET   /unified_service_worker.js     # SW 脚本
+GET   /navigation_interceptor.js     # 导航拦截器
+GET   /sw_client.js                  # 客户端工具库
+```
 
 ## 代理策略
 
-| 策略 | 适用场景 | 原理 | 优势 |
-|------|---------|------|------|
-| **None** | 端口服务已正确处理子路径 | 不处理任何请求 | 零开销 |
-| **Subpath** | 标准子路径代理 | 修正路径前缀与编码错位 | 轻量、高性能 |
-| **Tunnel** | 复杂代理环境 | 改写为后端隧道透传 | 覆盖面广 |
-| **Hybrid** | `%2F` 被特殊解码的环境 | 智能路由（普通走 Subpath，`%2F` 走 Tunnel） | 兼顾性能与兼容性 |
+| 策略 | 行为 | 适用场景 |
+|-----|------|---------|
+| None | 不处理任何请求 | 禁用 SW |
+| Subpath | `/path` → `/proxy/port/path` | 标准反向代理 |
+| Tunnel | 通过 HTTP 隧道转发 | 复杂代理环境 |
+| Hybrid | 智能选择 Subpath 或 Tunnel | `%2F` 被额外解码的环境 |
 
-## 使用方式
+## 核心算法
 
-### 标准环境
-```bash
-python server.py --host 0.0.0.0 --port 3000
-# 仅在检测到子路径环境时启动
+### 反向代理编码检测
+
+```javascript
+// 1. 解码深度检测
+const testSegment = "test path";  // 避免 %2F 干扰
+// 发送多层编码，通过反向编码计算解码深度
+
+// 2. %2F 额外解码检测
+const testSegment = "test/path";
+// 如果返回包含真实斜杠，说明 %2F 被额外解码
 ```
 
-### Gradio 环境
-```bash
-python main.gradio.py
-# 默认端口 7860，可通过 GRADIO_SERVER_PORT 环境变量指定
+### SW 配置协议
+
+```javascript
+worker.postMessage({
+  type: 'CONFIGURE',
+  data: {
+    strategy: 'subpath',      // 'none' | 'subpath' | 'tunnel' | 'hybrid'
+    decodeDepth: 0,           // 反向代理解码深度
+    slashExtraDecoding: false // %2F 是否被额外解码
+  }
+});
 ```
 
-### 依赖
-```bash
-pip install -r requirements.txt
+## 架构设计思考
+
+### JupyterLab 扩展：为什么使用 IFrame 而非原生 Widget？
+
+**当前架构**：
 ```
+JupyterLab 扩展
+├── 前端 (TypeScript) → IFrame Widget → 嵌入独立 Web 版界面
+└── 后端 (Python) → 独立 HTTP 服务 (端口 4000)
+```
+
+**原生 Widget 方案**：
+```
+JupyterLab 扩展
+├── 前端 (TypeScript) → 原生 Lumino Widget + sw_client.js
+└── 后端 (Jupyter Server 扩展) → 直接注册到 Jupyter Server
+```
+
+**权衡分析**：
+
+| 维度 | IFrame 方案（当前） | 原生 Widget 方案 |
+|-----|-------------------|-----------------|
+| 代码复用 | ✅ 直接复用独立 Web 版 | ❌ 需要重写前端 |
+| 开发复杂度 | ✅ 简单 | ❌ 需要学习 JupyterLab API |
+| 额外端口 | ❌ 需要端口 4000 | ✅ 无需额外端口 |
+| 样式统一 | ❌ IFrame 隔离 | ✅ 原生样式 |
+| 依赖 | ❌ 需要 jupyter-server-proxy | ✅ 无额外依赖 |
+
+**结论**：当前 IFrame 方案适合快速验证，长期可考虑重构为原生 Widget + Jupyter Server 扩展。
+
+### VS Code 扩展：为什么需要内嵌 HTTP 服务？
+
+**核心限制**：
+1. Service Worker 脚本必须通过 HTTP 提供（不能从扩展文件系统直接加载）
+2. VS Code Webview 与主页面同源，但扩展静态文件不可直接 HTTP 访问
+3. 必须通过 Code Server 的代理层访问 SW 脚本
+
+**解决方案**：
+```
+扩展启动 → Node.js HTTP 服务 (localhost:N)
+         → Code Server 代理 → /proxy/N/unified_service_worker.js
+         → 浏览器注册 SW 到 /proxy/{targetPort}/
+```
+
+## 开发指南
+
+### 修改核心文件
+
+1. 修改根目录的核心文件
+2. 运行各扩展的 `npm run prebuild` 复制到扩展目录
+3. 构建和测试
+
+### 添加新的共用文件
+
+1. 在根目录创建文件
+2. 更新 `jupyterlab-proxy-toolkit/scripts/copy-shared-files.js`
+3. 更新 `vscode-proxy-toolkit/scripts/copy-sw-files.js`
+4. 更新 `.gitignore`
+
+## 许可证
+
+MIT License
