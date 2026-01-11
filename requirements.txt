@@ -1,4 +1,3 @@
 aiohttp
-jupyter-server
+jupyter-core
 psutil
-requests

@@ -180,3 +180,7 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 .vscode
+
+.python-version
+pyproject.toml
+uv.lock

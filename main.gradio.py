@@ -19,8 +19,6 @@ def install_dependencies():
     try:
         import aiohttp
         import psutil
-        import requests
-        import jupyter_server
         print("[检查] 依赖已安装")
         return
     except ImportError:
@@ -37,7 +35,7 @@ def install_dependencies():
             print(f"[警告] 依赖文件安装失败: {e}")
     
     # 回退到直接安装依赖包
-    dependencies = ["aiohttp", "jupyter-server", "psutil", "requests"]
+    dependencies = ["aiohttp", "jupyter-core", "psutil"]
     print("[安装] 正在安装核心依赖包")
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install"] + dependencies)

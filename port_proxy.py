@@ -1,7 +1,59 @@
 import os
-from typing import Callable, cast
+from typing import cast
 import json
 from urllib.parse import urlparse
+from pathlib import Path
+
+
+# 缓存 runtime 目录
+_cached_runtime_dir: Path | None | bool = False  # False 表示未初始化
+
+
+def _get_jupyter_runtime_dir() -> Path | None:
+    """获取 Jupyter runtime 目录（带缓存）"""
+    global _cached_runtime_dir
+    
+    if _cached_runtime_dir is not False:
+        return _cached_runtime_dir  # type: ignore[return-value]
+    
+    # 优先使用 jupyter_core（准确、跨平台）
+    try:
+        from jupyter_core.paths import jupyter_runtime_dir
+        _cached_runtime_dir = Path(jupyter_runtime_dir())
+        return _cached_runtime_dir
+    except ImportError:
+        pass
+    
+    # 回退到各平台默认路径
+    import platform
+    system = platform.system()
+    if system == "Darwin":
+        runtime_dir = Path.home() / "Library/Jupyter/runtime"
+    elif system == "Windows":
+        runtime_dir = Path.home() / "AppData/Roaming/jupyter/runtime"
+    else:  # Linux
+        runtime_dir = Path.home() / ".local/share/jupyter/runtime"
+    
+    _cached_runtime_dir = runtime_dir if runtime_dir.exists() else None
+    return _cached_runtime_dir
+
+
+def _list_jupyter_servers() -> list[dict[str, str | int]]:
+    """从 runtime 目录读取运行中的 Jupyter server 信息"""
+    runtime_dir = _get_jupyter_runtime_dir()
+    if not runtime_dir:
+        return []
+    
+    servers: list[dict[str, str | int]] = []
+    for json_file in runtime_dir.glob("jpserver-*.json"):
+        try:
+            with open(json_file, "r") as f:
+                server_info = json.load(f)
+                servers.append(server_info)
+        except (json.JSONDecodeError, IOError):
+            continue
+    
+    return servers
 
 
 def check_jupyter_proxy() -> str:
@@ -15,26 +67,17 @@ def check_jupyter_proxy() -> str:
         else:
             return ""
 
-    try:
-        from jupyter_server import serverapp
-    except ImportError:
-        return ""
-
-    servers = list(serverapp.list_running_servers())
+    servers = _list_jupyter_servers()
     if not servers:
         return ""
 
-    try:
-        import requests
-    except ImportError:
-        return ""
-
-    proxy_template = r"proxy/{{port}}/"
-    
-    # 启动临时测试服务
     import socket
     import threading
     from http.server import HTTPServer, BaseHTTPRequestHandler
+    from urllib.request import urlopen
+    from urllib.error import URLError
+
+    proxy_template = r"proxy/{{port}}/"
     
     # 找个可用端口
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -49,46 +92,70 @@ def check_jupyter_proxy() -> str:
         def log_message(self, format, *args): pass
     
     test_server = HTTPServer(('127.0.0.1', test_port), TestHandler)
-    threading.Thread(target=test_server.serve_forever, daemon=True).start()
+    server_thread = threading.Thread(target=test_server.serve_forever, daemon=True)
+    server_thread.start()
     
+    result = ""
     try:
         proxy_str = proxy_template.replace("{{port}}", str(test_port))
-        for server in servers:  # pyright: ignore[reportAny]
-            server_base_url: str = server["base_url"]  # pyright: ignore[reportAny]
-            proxy_url = f"http://127.0.0.1:{server['port']}{server_base_url}{proxy_str}?token={server['token']}"
+        for server in servers:
+            server_base_url = str(server.get("base_url", "/"))
+            server_port = server.get("port", 8888)
+            server_token = server.get("token", "")
+            proxy_url = f"http://127.0.0.1:{server_port}{server_base_url}{proxy_str}"
+            if server_token:
+                proxy_url += f"?token={server_token}"
             try:
-                resp = requests.get(proxy_url, timeout=2)
-                if resp.status_code == 200:
-                    return server_base_url + proxy_template
-            except requests.exceptions.RequestException:
+                with urlopen(proxy_url, timeout=2) as resp:
+                    if resp.status == 200:
+                        result = server_base_url + proxy_template
+                        break
+            except (URLError, OSError):
                 continue
     finally:
-        test_server.shutdown()
+        # 异步关闭，不阻塞
+        threading.Thread(target=test_server.shutdown, daemon=True).start()
 
-    return ""
+    return result
 
 
-def check_code_server_proxy() -> str:
-    """检查Code Server代理配置"""
+def check_code_server_proxy(pids: list[int] | None = None) -> str:
+    """检查Code Server代理配置
+    
+    Args:
+        pids: 可选的 PID 列表，如果提供则只检查这些进程，否则遍历所有进程
+    """
     try:
         import psutil
     except ImportError:
         return ""
 
-    for proc in psutil.process_iter(["pid", "name", "cmdline", "environ"]):  # pyright: ignore[reportUnknownMemberType]
-        try:
-            cmdline = proc.cmdline()
-            if not cmdline:
-                continue
-
-            cmd = " ".join(cmdline)
-            if "code-server" in cmd.lower():
+    if pids:
+        # 直接检查指定的 PID
+        for pid in pids:
+            try:
+                proc = psutil.Process(pid)
                 env_VSCODE_PROXY_URI = proc.environ().get("VSCODE_PROXY_URI")
                 if env_VSCODE_PROXY_URI:
                     return env_VSCODE_PROXY_URI
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                continue
+    else:
+        # 遍历所有进程
+        for proc in psutil.process_iter(["pid", "name", "cmdline", "environ"]):  # pyright: ignore[reportUnknownMemberType]
+            try:
+                cmdline = proc.cmdline()
+                if not cmdline:
+                    continue
 
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            pass
+                cmd = " ".join(cmdline)
+                if "code-server" in cmd.lower():
+                    env_VSCODE_PROXY_URI = proc.environ().get("VSCODE_PROXY_URI")
+                    if env_VSCODE_PROXY_URI:
+                        return env_VSCODE_PROXY_URI
+
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
 
     return ""
 
@@ -144,14 +211,12 @@ def detect_service_config(use_cache: bool = True) -> str:
     
     url_templates: list[str] = []
 
-    # 服务检测配置
-    service_configs: dict[str, Callable[[], str]] = {
-        "jupyter-lab": check_jupyter_proxy,
-        "code-server": check_code_server_proxy,
-    }
-
     try:
         import psutil
+
+        # 收集各服务的 PID
+        jupyter_pids: set[int] = set()
+        code_server_pids: set[int] = set()
 
         # 使用网络连接方式发现服务
         for conn in psutil.net_connections(kind="inet"):
@@ -166,15 +231,24 @@ def detect_service_config(use_cache: bool = True) -> str:
 
                 cmd = " ".join(cmdline).lower()
 
-                # 检测各种服务
-                for service_name, config_func in service_configs.items():
-                    if service_name in cmd:
-                        url_template = config_func()
-                        if url_template and url_template not in url_templates:
-                            url_templates.append(url_template)
+                if "jupyter-lab" in cmd:
+                    jupyter_pids.add(conn.pid)
+                if "code-server" in cmd:
+                    code_server_pids.add(conn.pid)
 
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
+
+        # 按需调用检测函数
+        if jupyter_pids:
+            url_template = check_jupyter_proxy()
+            if url_template:
+                url_templates.append(url_template)
+        
+        if code_server_pids:
+            url_template = check_code_server_proxy(pids=list(code_server_pids))
+            if url_template and url_template not in url_templates:
+                url_templates.append(url_template)
 
         # 找到子路径最短的URL模板
         if url_templates:
