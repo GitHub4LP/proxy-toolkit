@@ -108,8 +108,10 @@ uv run python -m build --wheel --no-isolation
 ```bash
 cd jupyterlab-proxy-toolkit
 npm install
-npm run build:prod
+npm run prebuild
+npm run build:lib:prod
 cd ..
+uv run jupyter labextension build jupyterlab-proxy-toolkit
 uv run python -m build jupyterlab-proxy-toolkit --wheel --no-isolation
 # 生成 jupyterlab-proxy-toolkit/dist/jupyterlab_proxy_toolkit-0.1.0-py3-none-any.whl
 ```

@@ -26,8 +26,9 @@
     "url": "https://github.com/user/jupyterlab-proxy-toolkit.git"
   },
   "scripts": {
-    "build": "npm run build:lib && npm run build:labextension:dev",
-    "build:prod": "npm run clean && npm run build:lib:prod && npm run build:labextension",
+    "prebuild": "node scripts/copy-license.js",
+    "build": "npm run prebuild && npm run build:lib && npm run build:labextension:dev",
+    "build:prod": "npm run clean && npm run prebuild && npm run build:lib:prod && npm run build:labextension",
     "build:labextension": "jupyter labextension build .",
     "build:labextension:dev": "jupyter labextension build --development True .",
     "build:lib": "tsc --sourceMap",
