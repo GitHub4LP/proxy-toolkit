@@ -121,7 +121,7 @@ cd vscode-proxy-toolkit
 npm install
 npm run build
 npm run package
-# 生成 vscode-proxy-toolkit-0.0.1.vsix
+# 生成 vscode-proxy-toolkit-0.1.0.vsix
 ```
 
 ### 修改核心文件

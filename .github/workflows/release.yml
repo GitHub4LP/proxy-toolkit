@@ -46,7 +46,9 @@ jobs:
         working-directory: jupyterlab-proxy-toolkit
         run: |
           npm install
-          npm run build:prod
+          npm run clean
+          npm run build:lib:prod
+          uv run jupyter labextension build .
       
       - name: Build JupyterLab Extension (wheel)
         run: uv run python -m build jupyterlab-proxy-toolkit --wheel --no-isolation
