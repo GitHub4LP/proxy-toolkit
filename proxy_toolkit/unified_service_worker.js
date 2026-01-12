@@ -232,7 +232,9 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('message', (event) => {
-    if (event.data && event.data.type === 'CONFIGURE') {
+    if (!event.data || !event.data.type) return;
+
+    if (event.data.type === 'CONFIGURE') {
         // 配置 SW 策略
         const oldStrategy = strategy;
         const oldDepth = decodeDepth;
@@ -261,6 +263,16 @@ self.addEventListener('message', (event) => {
                 client.navigate(client.url).catch(() => {});
             });
         }).catch(() => {});
+    } else if (event.data.type === 'GET_CONFIG') {
+        // 查询当前配置，通过 MessageChannel 返回
+        const port = event.ports && event.ports[0];
+        if (port) {
+            port.postMessage({
+                strategy: strategy,
+                decodeDepth: decodeDepth,
+                slashExtraDecoding: slashExtraDecoding
+            });
+        }
     }
 });
 

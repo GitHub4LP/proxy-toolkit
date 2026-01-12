@@ -48,7 +48,7 @@ def install_dependencies():
 # 自动安装依赖
 install_dependencies()
 
-from server import PortServer
+from proxy_toolkit import PortServer
 
 
 async def main():

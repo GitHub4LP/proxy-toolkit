@@ -294,7 +294,33 @@ class PortApp {
         this.savePortStrategies();
     }
 
-    getPortMode(port) {
+    /**
+     * 获取端口的实际模式（从 SW 查询）
+     */
+    async getPortMode(port) {
+        const swState = this.serviceWorkerStates.get(port);
+        if (!swState || !swState.registered || !swState.registration?.active) {
+            return 'none';
+        }
+        
+        // 从 SW 查询真实配置
+        const config = await SwClient.getServiceWorkerConfig(swState.registration.active);
+        if (config && config.strategy) {
+            // 同步到本地存储
+            if (config.strategy !== 'none') {
+                this.portStrategies.set(port, config.strategy);
+            }
+            return config.strategy;
+        }
+        
+        // 查询失败，回退到本地存储
+        return this.getPortStrategy(port);
+    }
+
+    /**
+     * 同步获取端口模式（用于 UI 渲染，不阻塞）
+     */
+    getPortModeSync(port) {
         const swState = this.serviceWorkerStates.get(port);
         if (!swState || !swState.registered) return 'none';
         return this.getPortStrategy(port);
@@ -543,7 +569,7 @@ class PortApp {
     renderProxyModeSelect(port) {
         if (!this.swEnabled || !port.proxy_url) return '';
 
-        const currentMode = this.getPortMode(port.port);
+        const currentMode = this.getPortModeSync(port.port);
         const swState = this.serviceWorkerStates.get(port.port) || { loading: false };
 
         if (swState.loading) {

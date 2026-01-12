@@ -1,6 +1,7 @@
 """JupyterLab Proxy Toolkit Extension"""
 
-__version__ = "0.1.0"
+# 从 proxy-toolkit 包导入
+from proxy_toolkit import __version__
 
 
 def _jupyter_labextension_paths():

@@ -23,8 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "aiohttp>=3.8.0",
-    "psutil>=5.9.0",
+    "proxy-toolkit>=0.1.0",
 ]
 dynamic = ["version", "description", "authors", "urls", "keywords"]
 

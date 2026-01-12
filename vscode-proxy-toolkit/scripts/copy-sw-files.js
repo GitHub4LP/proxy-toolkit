@@ -4,11 +4,12 @@
 const fs = require('fs');
 const path = require('path');
 
-const srcDir = path.join(__dirname, '..', '..');
+const rootDir = path.join(__dirname, '..', '..');
+const proxyToolkitDir = path.join(rootDir, 'proxy_toolkit');
 const extDir = path.join(__dirname, '..');
 const resourcesDir = path.join(extDir, 'resources');
 
-// SW 相关文件 → resources/
+// SW 相关文件 → resources/（从 proxy_toolkit/ 复制）
 const swFiles = [
   'unified_service_worker.js',
   'navigation_interceptor.js',
@@ -24,7 +25,7 @@ fs.mkdirSync(resourcesDir, { recursive: true });
 
 // 复制 SW 文件
 swFiles.forEach(file => {
-  const srcPath = path.join(srcDir, file);
+  const srcPath = path.join(proxyToolkitDir, file);
   const destPath = path.join(resourcesDir, file);
   
   if (fs.existsSync(srcPath)) {
@@ -38,7 +39,7 @@ swFiles.forEach(file => {
 
 // 复制根目录文件
 rootFiles.forEach(file => {
-  const srcPath = path.join(srcDir, file);
+  const srcPath = path.join(rootDir, file);
   const destPath = path.join(extDir, file);
   
   if (fs.existsSync(srcPath)) {

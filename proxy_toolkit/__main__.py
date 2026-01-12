@@ -1,4 +1,4 @@
-"""Entry point for running server as module: python -m jupyterlab_proxy_toolkit.server"""
+"""允许通过 python -m proxy_toolkit 启动服务"""
 
 import asyncio
 from .server import main

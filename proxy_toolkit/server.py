@@ -13,7 +13,7 @@ from typing import Dict, Optional
 import psutil
 from aiohttp import web
 
-from port_proxy import detect_service_config, generate_proxy_url
+from .port_proxy import detect_service_config, generate_proxy_url
 
 
 def get_available_port():

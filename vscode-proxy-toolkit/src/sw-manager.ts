@@ -5,7 +5,6 @@
 
 import * as vscode from 'vscode';
 import * as path from 'path';
-import * as fs from 'fs';
 import { SwServer } from './sw-server';
 import { getProxyUrlTemplate, generateProxyUrl } from './proxy-url-resolver';
 
@@ -18,13 +17,41 @@ interface SwState {
 export class SwManager {
   private webviewPanel: vscode.WebviewPanel | null = null;
   private swStates: Map<number, SwState> = new Map();
-  private encodingConfig: { decodeDepth: number; slashExtraDecoding: boolean } | null = null;
-  private pendingOperations: Map<string, { resolve: () => void; reject: (err: Error) => void }> = new Map();
+  private pendingOperations: Map<string, { resolve: (value?: any) => void; reject: (err: Error) => void }> = new Map();
+  private initPromise: Promise<void> | null = null;
+  private sessionActive: boolean = false;
 
   constructor(
     private context: vscode.ExtensionContext,
     private swServer: SwServer
   ) {}
+
+  /**
+   * 开启会话（手动控制 Webview 生命周期）
+   */
+  async openSession(): Promise<void> {
+    this.sessionActive = true;
+    await this.ensureWebview();
+  }
+
+  /**
+   * 关闭会话
+   */
+  closeSession(): void {
+    this.sessionActive = false;
+    this.closeWebview();
+  }
+
+  /**
+   * 关闭 Webview
+   */
+  private closeWebview(): void {
+    if (this.webviewPanel) {
+      this.webviewPanel.dispose();
+      this.webviewPanel = null;
+      this.initPromise = null;
+    }
+  }
 
   /**
    * 初始化 Webview（延迟创建）
@@ -34,11 +61,21 @@ export class SwManager {
       return;
     }
 
-    // 创建隐藏的 Webview
+    // 防止并发初始化
+    if (this.initPromise) {
+      return this.initPromise;
+    }
+
+    this.initPromise = this.createWebview();
+    return this.initPromise;
+  }
+
+  private async createWebview(): Promise<void> {
+    // 创建 Webview
     this.webviewPanel = vscode.window.createWebviewPanel(
       'proxyToolkitSw',
-      'Proxy Toolkit SW',
-      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+      'Proxy Toolkit',
+      { viewColumn: vscode.ViewColumn.Active, preserveFocus: true },
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -47,9 +84,6 @@ export class SwManager {
         ]
       }
     );
-
-    // 隐藏面板（最小化干扰）
-    // 注意：VS Code 没有直接隐藏 Webview 的 API，但 retainContextWhenHidden 可以保持后台运行
 
     // 设置 Webview 内容
     this.webviewPanel.webview.html = this.getWebviewContent();
@@ -61,16 +95,19 @@ export class SwManager {
       this.context.subscriptions
     );
 
-    // 监听关闭
+    // 监听关闭（用户手动关闭时清理状态）
     this.webviewPanel.onDidDispose(() => {
       this.webviewPanel = null;
+      this.initPromise = null;
+      // 清理所有 pending 操作
+      for (const [id, { reject }] of this.pendingOperations) {
+        reject(new Error('Webview disposed'));
+      }
+      this.pendingOperations.clear();
     });
 
-    // 等待 Webview 就绪
+    // 等待 Webview 就绪（包括编码检测，由 sw_client.js 处理缓存）
     await this.waitForWebviewReady();
-
-    // 检测编码
-    await this.detectEncoding();
   }
 
   private getWebviewContent(): string {
@@ -89,190 +126,105 @@ export class SwManager {
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' ${swScriptBase}; connect-src *;">
 </head>
 <body>
+  <script src="${swScriptBase}/sw_client.js"></script>
   <script>
     const vscode = acquireVsCodeApi();
     const swScriptBase = '${swScriptBase}';
     const testEndpoint = swScriptBase + '/api/test-encoding';
-
-    // 编码检测
-    async function detectProxyEncoding() {
-      const result = { decodeDepth: 0, slashExtraDecoding: false };
-
-      try {
-        const testSegment = "test path";
-        let maxLayers = 4;
-        const maxAttempts = 8;
-        const baseEncoded = encodeURIComponent(testSegment);
-
-        while (maxLayers <= maxAttempts) {
-          let encodedSegment = baseEncoded;
-          for (let i = 0; i < maxLayers; i++) {
-            encodedSegment = encodeURIComponent(encodedSegment);
-          }
-
-          const response = await fetch(testEndpoint + '/' + encodedSegment);
-          if (!response.ok) break;
-
-          const data = await response.json();
-          let current = data.path;
-          let encodeSteps = 0;
-
-          while (current !== encodedSegment && encodeSteps < maxLayers) {
-            current = encodeURIComponent(current);
-            encodeSteps++;
-          }
-
-          const detectedDepth = (current === encodedSegment) ? encodeSteps : 0;
-          
-          // 验证
-          let verifySegment = baseEncoded;
-          for (let i = 0; i < detectedDepth; i++) {
-            verifySegment = encodeURIComponent(verifySegment);
-          }
-          const verifyResponse = await fetch(testEndpoint + '/' + verifySegment);
-          if (verifyResponse.ok) {
-            const verifyData = await verifyResponse.json();
-            if (verifyData.path === baseEncoded) {
-              result.decodeDepth = detectedDepth;
-              break;
-            }
-          }
-          maxLayers++;
-        }
-
-        // 检测 %2F 额外解码
-        if (result.decodeDepth >= 0) {
-          const slashTest = "test/path";
-          const slashEncoded = encodeURIComponent(slashTest);
-          let encoded = slashEncoded;
-          for (let i = 0; i < result.decodeDepth; i++) {
-            encoded = encodeURIComponent(encoded);
-          }
-          const slashResponse = await fetch(testEndpoint + '/' + encoded);
-          if (slashResponse.ok) {
-            const slashData = await slashResponse.json();
-            const pathParts = slashData.path.split('/');
-            result.slashExtraDecoding = pathParts.filter(p => p !== '').length > 1;
-          }
-        }
-      } catch (err) {
-        console.warn('Encoding detection failed:', err);
-      }
-
-      return result;
-    }
-
-    // SW 注册
-    async function registerSw(scope, strategy, config) {
-      try {
-        const swScriptUrl = swScriptBase + '/unified_service_worker.js';
-        const registration = await navigator.serviceWorker.register(swScriptUrl, { scope });
-
-        // 等待激活
-        if (registration.installing) {
-          await new Promise(resolve => {
-            registration.installing.addEventListener('statechange', function() {
-              if (this.state === 'activated' || this.state === 'redundant') {
-                resolve();
-              }
-            });
-            setTimeout(resolve, 5000);
-          });
-        }
-
-        // 配置
-        if (registration.active) {
-          registration.active.postMessage({
-            type: 'CONFIGURE',
-            data: {
-              strategy: strategy,
-              decodeDepth: config.decodeDepth,
-              slashExtraDecoding: config.slashExtraDecoding
-            }
-          });
-        }
-
-        return true;
-      } catch (err) {
-        console.error('SW registration failed:', err);
-        return false;
-      }
-    }
-
-    // SW 注销
-    async function unregisterSw(scope) {
-      try {
-        const registrations = await navigator.serviceWorker.getRegistrations();
-        for (const reg of registrations) {
-          const regScope = new URL(reg.scope).pathname;
-          const targetScope = scope.startsWith('/') ? scope : new URL(scope).pathname;
-          if (regScope === targetScope) {
-            await reg.unregister();
-            return true;
-          }
-        }
-        return false;
-      } catch (err) {
-        console.error('SW unregistration failed:', err);
-        return false;
-      }
-    }
-
-    // 配置 SW
-    async function configureSw(scope, strategy, config) {
-      try {
-        const registrations = await navigator.serviceWorker.getRegistrations();
-        for (const reg of registrations) {
-          const regScope = new URL(reg.scope).pathname;
-          const targetScope = scope.startsWith('/') ? scope : new URL(scope).pathname;
-          if (regScope === targetScope && reg.active) {
-            reg.active.postMessage({
-              type: 'CONFIGURE',
-              data: {
-                strategy: strategy,
-                decodeDepth: config.decodeDepth,
-                slashExtraDecoding: config.slashExtraDecoding
-              }
-            });
-            return true;
-          }
-        }
-        return false;
-      } catch (err) {
-        console.error('SW configuration failed:', err);
-        return false;
-      }
-    }
 
     // 消息处理
     window.addEventListener('message', async (event) => {
       const message = event.data;
       
       switch (message.type) {
-        case 'detectEncoding':
-          const encoding = await detectProxyEncoding();
-          vscode.postMessage({ type: 'encodingResult', data: encoding, id: message.id });
+        case 'preRegisterSw': {
+          // 只注册 SW，不配置策略（用于预注册）
+          try {
+            const swScriptUrl = swScriptBase + '/unified_service_worker.js';
+            await SwClient.registerServiceWorker(swScriptUrl, message.scope);
+            vscode.postMessage({ type: 'preRegisterResult', success: true, id: message.id });
+          } catch (err) {
+            console.error('SW pre-registration failed:', err);
+            vscode.postMessage({ type: 'preRegisterResult', success: false, id: message.id });
+          }
           break;
+        }
+
+        case 'registerSw': {
+          try {
+            const encoding = await SwClient.detectProxyEncoding(testEndpoint);
+            const swScriptUrl = swScriptBase + '/unified_service_worker.js';
+            const registration = await SwClient.registerServiceWorker(swScriptUrl, message.scope);
+            if (registration.active) {
+              SwClient.configureServiceWorker(registration.active, {
+                strategy: message.strategy,
+                decodeDepth: encoding.decodeDepth,
+                slashExtraDecoding: encoding.slashExtraDecoding
+              });
+            }
+            vscode.postMessage({ type: 'registerResult', success: true, id: message.id });
+          } catch (err) {
+            console.error('SW registration failed:', err);
+            vscode.postMessage({ type: 'registerResult', success: false, id: message.id });
+          }
+          break;
+        }
           
-        case 'registerSw':
-          const regResult = await registerSw(message.scope, message.strategy, message.config);
-          vscode.postMessage({ type: 'registerResult', success: regResult, id: message.id });
+        case 'unregisterSw': {
+          const success = await SwClient.unregisterServiceWorker(message.scope);
+          vscode.postMessage({ type: 'unregisterResult', success, id: message.id });
           break;
+        }
           
-        case 'unregisterSw':
-          const unregResult = await unregisterSw(message.scope);
-          vscode.postMessage({ type: 'unregisterResult', success: unregResult, id: message.id });
+        case 'configureSw': {
+          try {
+            const encoding = await SwClient.detectProxyEncoding(testEndpoint);
+            const registrations = await SwClient.getRegistrations();
+            const targetScope = SwClient.normalizeUrl(message.scope);
+            let success = false;
+            for (const reg of registrations) {
+              if (SwClient.normalizeUrl(reg.scope) === targetScope && reg.active) {
+                SwClient.configureServiceWorker(reg.active, {
+                  strategy: message.strategy,
+                  decodeDepth: encoding.decodeDepth,
+                  slashExtraDecoding: encoding.slashExtraDecoding
+                });
+                success = true;
+                break;
+              }
+            }
+            vscode.postMessage({ type: 'configureResult', success, id: message.id });
+          } catch (err) {
+            console.error('SW configuration failed:', err);
+            vscode.postMessage({ type: 'configureResult', success: false, id: message.id });
+          }
           break;
+        }
           
-        case 'configureSw':
-          const configResult = await configureSw(message.scope, message.strategy, message.config);
-          vscode.postMessage({ type: 'configureResult', success: configResult, id: message.id });
+        case 'querySwConfig': {
+          try {
+            const registrations = await SwClient.getRegistrations();
+            const targetScope = SwClient.normalizeUrl(message.scope);
+            let config = null;
+            for (const reg of registrations) {
+              if (SwClient.normalizeUrl(reg.scope) === targetScope && reg.active) {
+                config = await SwClient.getServiceWorkerConfig(reg.active);
+                break;
+              }
+            }
+            vscode.postMessage({ type: 'queryResult', data: config, id: message.id });
+          } catch (err) {
+            console.error('SW query failed:', err);
+            vscode.postMessage({ type: 'queryResult', data: null, id: message.id });
+          }
           break;
+        }
       }
     });
 
-    // 通知就绪
+    // 立即通知就绪，编码检测后台预热（不阻塞）
     vscode.postMessage({ type: 'ready' });
+    SwClient.detectProxyEncoding(testEndpoint);
   </script>
 </body>
 </html>`;
@@ -295,10 +247,9 @@ export class SwManager {
       const { resolve, reject } = this.pendingOperations.get(id)!;
       this.pendingOperations.delete(id);
 
-      if (message.type === 'encodingResult') {
-        this.encodingConfig = message.data;
-        resolve();
-      } else if (message.type === 'registerResult' || message.type === 'unregisterResult' || message.type === 'configureResult') {
+      if (message.type === 'queryResult') {
+        resolve(message.data);
+      } else if (message.type === 'preRegisterResult' || message.type === 'registerResult' || message.type === 'unregisterResult' || message.type === 'configureResult') {
         if (message.success) {
           resolve();
         } else {
@@ -315,7 +266,6 @@ export class SwManager {
       this.pendingOperations.set(id, { resolve, reject });
       this.webviewPanel!.webview.postMessage(message);
 
-      // 超时
       setTimeout(() => {
         if (this.pendingOperations.has(id)) {
           this.pendingOperations.delete(id);
@@ -325,8 +275,20 @@ export class SwManager {
     });
   }
 
-  private async detectEncoding(): Promise<void> {
-    await this.sendToWebview({ type: 'detectEncoding' });
+  private sendToWebviewWithResult<T>(message: any): Promise<T | null> {
+    return new Promise((resolve) => {
+      const id = Date.now().toString() + Math.random().toString(36);
+      message.id = id;
+      this.pendingOperations.set(id, { resolve: resolve as any, reject: () => resolve(null) });
+      this.webviewPanel!.webview.postMessage(message);
+
+      setTimeout(() => {
+        if (this.pendingOperations.has(id)) {
+          this.pendingOperations.delete(id);
+          resolve(null);
+        }
+      }, 5000);
+    });
   }
 
   /**
@@ -345,14 +307,18 @@ export class SwManager {
       scope += '/';
     }
 
-    await this.sendToWebview({
-      type: 'registerSw',
-      scope,
-      strategy,
-      config: this.encodingConfig || { decodeDepth: 0, slashExtraDecoding: false }
-    });
-
-    this.swStates.set(targetPort, { port: targetPort, strategy, scope });
+    try {
+      await this.sendToWebview({
+        type: 'registerSw',
+        scope,
+        strategy
+      });
+      this.swStates.set(targetPort, { port: targetPort, strategy, scope });
+    } finally {
+      if (!this.sessionActive) {
+        this.closeWebview();
+      }
+    }
   }
 
   /**
@@ -365,8 +331,14 @@ export class SwManager {
     }
 
     await this.ensureWebview();
-    await this.sendToWebview({ type: 'unregisterSw', scope: state.scope });
-    this.swStates.delete(targetPort);
+    try {
+      await this.sendToWebview({ type: 'unregisterSw', scope: state.scope });
+      this.swStates.delete(targetPort);
+    } finally {
+      if (!this.sessionActive) {
+        this.closeWebview();
+      }
+    }
   }
 
   /**
@@ -376,20 +348,23 @@ export class SwManager {
     const state = this.swStates.get(targetPort);
     
     if (!state) {
-      // 未注册，先注册
       await this.registerSw(targetPort, strategy);
       return;
     }
 
     await this.ensureWebview();
-    await this.sendToWebview({
-      type: 'configureSw',
-      scope: state.scope,
-      strategy,
-      config: this.encodingConfig || { decodeDepth: 0, slashExtraDecoding: false }
-    });
-
-    state.strategy = strategy;
+    try {
+      await this.sendToWebview({
+        type: 'configureSw',
+        scope: state.scope,
+        strategy
+      });
+      state.strategy = strategy;
+    } finally {
+      if (!this.sessionActive) {
+        this.closeWebview();
+      }
+    }
   }
 
   /**
@@ -397,6 +372,116 @@ export class SwManager {
    */
   getState(targetPort: number): SwState | undefined {
     return this.swStates.get(targetPort);
+  }
+
+  /**
+   * 预注册 SW（只注册，不配置策略）
+   * 用于在用户选择前后台预热
+   */
+  async preRegister(targetPort: number): Promise<void> {
+    const template = getProxyUrlTemplate();
+    if (!template) {
+      throw new Error('No proxy URL template');
+    }
+
+    let scope = generateProxyUrl(template, targetPort);
+    if (!scope.endsWith('/')) {
+      scope += '/';
+    }
+
+    // 如果已经注册过，跳过
+    if (this.swStates.has(targetPort)) {
+      return;
+    }
+
+    await this.ensureWebview();
+    try {
+      await this.sendToWebview({
+        type: 'preRegisterSw',
+        scope
+      });
+      // 预注册成功，记录状态（策略为 none）
+      this.swStates.set(targetPort, { port: targetPort, strategy: 'none', scope });
+    } finally {
+      if (!this.sessionActive) {
+        this.closeWebview();
+      }
+    }
+  }
+
+  /**
+   * 配置已注册 SW 的策略
+   */
+  async configureStrategy(targetPort: number, strategy: string): Promise<void> {
+    const state = this.swStates.get(targetPort);
+    if (!state) {
+      // 未注册，走完整注册流程
+      await this.registerSw(targetPort, strategy);
+      return;
+    }
+
+    await this.ensureWebview();
+    try {
+      await this.sendToWebview({
+        type: 'configureSw',
+        scope: state.scope,
+        strategy
+      });
+      state.strategy = strategy;
+    } finally {
+      if (!this.sessionActive) {
+        this.closeWebview();
+      }
+    }
+  }
+
+  /**
+   * 查询端口的实际策略（从 SW 查询）
+   */
+  async getStrategy(targetPort: number): Promise<string> {
+    const template = getProxyUrlTemplate();
+    if (!template) {
+      return 'none';
+    }
+
+    let scope = generateProxyUrl(template, targetPort);
+    if (!scope.endsWith('/')) {
+      scope += '/';
+    }
+
+    try {
+      await this.ensureWebview();
+      
+      interface SwConfig {
+        strategy: string;
+        decodeDepth: number;
+        slashExtraDecoding: boolean;
+      }
+      
+      const config = await this.sendToWebviewWithResult<SwConfig>({
+        type: 'querySwConfig',
+        scope
+      });
+
+      if (config && config.strategy) {
+        const state = this.swStates.get(targetPort);
+        if (state) {
+          state.strategy = config.strategy;
+        } else if (config.strategy !== 'none') {
+          this.swStates.set(targetPort, { port: targetPort, strategy: config.strategy, scope });
+        }
+        return config.strategy;
+      }
+    } catch (err) {
+      console.warn(`[SW Manager] Failed to query strategy for port ${targetPort}:`, err);
+    } finally {
+      if (!this.sessionActive) {
+        this.closeWebview();
+      }
+    }
+
+    const state = this.swStates.get(targetPort);
+    return state?.strategy || 'none';
   }
 
   /**

@@ -144,8 +144,8 @@ async function startService(port: number): Promise<boolean> {
     let resolved = false;
 
     ws.onopen = () => {
-      // 发送启动命令（后台运行）
-      const cmd = `python -m jupyterlab_proxy_toolkit.server --port ${port} &\r`;
+      // 发送启动命令（后台运行）- 使用 proxy_toolkit 包
+      const cmd = `python -m proxy_toolkit --port ${port} &\r`;
       ws.send(JSON.stringify(['stdin', cmd]));
     };
 

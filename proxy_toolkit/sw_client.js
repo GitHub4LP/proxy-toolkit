@@ -8,12 +8,35 @@
 
   // ==================== 编码检测 ====================
 
+  const ENCODING_CACHE_KEY = 'sw_client_encoding_config';
+
   /**
-   * 检测反向代理编码行为
+   * 检测反向代理编码行为（带缓存）
    * @param {string} testEndpoint - 测试端点基础路径，如 '/api/test-encoding'
+   * @param {object} [options] - 选项
+   * @param {boolean} [options.useCache=true] - 是否使用缓存
+   * @param {boolean} [options.forceRefresh=false] - 是否强制刷新缓存
    * @returns {Promise<{decodeDepth: number, slashExtraDecoding: boolean}>}
    */
-  async function detectProxyEncoding(testEndpoint) {
+  async function detectProxyEncoding(testEndpoint, options = {}) {
+    const { useCache = true, forceRefresh = false } = options;
+
+    // 尝试读取缓存
+    if (useCache && !forceRefresh) {
+      try {
+        const cached = localStorage.getItem(ENCODING_CACHE_KEY);
+        if (cached) {
+          const config = JSON.parse(cached);
+          if (typeof config.decodeDepth === 'number' && typeof config.slashExtraDecoding === 'boolean') {
+            console.log('[SW Client] Using cached encoding config:', config);
+            return config;
+          }
+        }
+      } catch (e) {
+        // 缓存读取失败，继续检测
+      }
+    }
+
     const result = { decodeDepth: 0, slashExtraDecoding: false };
 
     try {
@@ -59,6 +82,15 @@
       }
 
       console.log(`[SW Client] Encoding detection: depth=${result.decodeDepth}, slashExtraDecoding=${result.slashExtraDecoding}`);
+
+      // 保存到缓存
+      if (useCache) {
+        try {
+          localStorage.setItem(ENCODING_CACHE_KEY, JSON.stringify(result));
+        } catch (e) {
+          // 缓存写入失败，忽略
+        }
+      }
     } catch (error) {
       console.warn('[SW Client] Encoding detection failed:', error);
     }
@@ -164,6 +196,40 @@
         strategy: config.strategy || 'none',
         decodeDepth: config.decodeDepth || 0,
         slashExtraDecoding: config.slashExtraDecoding || false
+      }
+    });
+  }
+
+  /**
+   * 查询 Service Worker 当前配置
+   * @param {ServiceWorker} worker - SW 实例
+   * @param {number} [timeout=3000] - 超时时间（毫秒）
+   * @returns {Promise<{strategy: string, decodeDepth: number, slashExtraDecoding: boolean}|null>}
+   */
+  function getServiceWorkerConfig(worker, timeout = 3000) {
+    return new Promise((resolve) => {
+      const channel = new MessageChannel();
+      
+      const timer = setTimeout(() => {
+        resolve(null);
+      }, timeout);
+
+      channel.port1.onmessage = (event) => {
+        clearTimeout(timer);
+        resolve(event.data);
+      };
+
+      channel.port1.onmessageerror = () => {
+        clearTimeout(timer);
+        resolve(null);
+      };
+
+      try {
+        worker.postMessage({ type: 'GET_CONFIG' }, [channel.port2]);
+      } catch (err) {
+        clearTimeout(timer);
+        console.warn('[SW Client] Failed to query config:', err);
+        resolve(null);
       }
     });
   }
@@ -301,6 +367,7 @@
     // SW 管理
     registerServiceWorker,
     configureServiceWorker,
+    getServiceWorkerConfig,
     unregisterServiceWorker,
     getRegistrations,
 

@@ -182,16 +182,14 @@ cython_debug/
 .vscode
 
 .python-version
-uv.lock
+**/uv.lock
 
 # ==================== 扩展构建产物 ====================
 
 # JupyterLab 扩展 - 构建产物
-jupyterlab-proxy-toolkit/jupyterlab_proxy_toolkit/server/*
-!jupyterlab-proxy-toolkit/jupyterlab_proxy_toolkit/server/__init__.py
-!jupyterlab-proxy-toolkit/jupyterlab_proxy_toolkit/server/__main__.py
 jupyterlab-proxy-toolkit/jupyterlab_proxy_toolkit/labextension/
 jupyterlab-proxy-toolkit/jupyterlab_proxy_toolkit/_version.py
+jupyterlab-proxy-toolkit/lib/
 jupyterlab-proxy-toolkit/LICENSE
 
 # VS Code 扩展 - 构建产物
@@ -202,5 +200,7 @@ vscode-proxy-toolkit/LICENSE
 # 通用忽略
 **/node_modules/
 **/package-lock.json
+**/yarn.lock
+**/tsconfig.tsbuildinfo
 **/*.vsix
 **/.kiro/
