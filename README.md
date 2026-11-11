@@ -1,6 +1,6 @@
 # Browser Proxy Toolkit
 
-通过 Service Worker 拦截和重写请求 URL，解决 Web 应用在子路径反向代理环境下的资源加载问题。支持三种部署场景：独立 Web 版、JupyterLab 扩展、VS Code/Code Server 扩展。
+通过 Service Worker 拦截和重写请求 URL，解决 Web 应用在子路径反向代理环境下的资源加载问题。当前聚焦核心代理方案的研究与验证。
 
 ## 核心特性
 
@@ -13,13 +13,6 @@
 - 自动识别：JupyterLab、Code Server、AI Studio
 - 代理模板生成：返回最短子路径模板
 - 编码深度检测：探测反向代理的解码行为
-
-### 📦 三种部署场景
-| 场景 | 安装方式 | 用户界面 |
-|-----|---------|---------|
-| 独立 Web 版 | `pip install proxy-toolkit` | 端口管理界面 |
-| JupyterLab 扩展 | `pip install jupyterlab-proxy-toolkit` | IFrame 嵌入 |
-| VS Code 扩展 | 安装 `.vsix` 文件 | 端口面板右键菜单 |
 
 ## 项目结构
 
@@ -38,50 +31,34 @@ proxy-toolkit/
 │       ├── app.js
 │       └── style.css
 │
-├── jupyterlab-proxy-toolkit/       # JupyterLab 扩展（依赖 proxy-toolkit）
-│   ├── src/index.ts                # 前端入口
-│   └── jupyterlab_proxy_toolkit/   # Python 包（仅 labextension）
-│
-├── vscode-proxy-toolkit/           # VS Code 扩展
-│   ├── src/                        # TypeScript 源码
-│   └── resources/                  # 构建时复制的 JS 文件
+└── proxy_toolkit_go/              # Go 重写实现，含前端与设计说明
 ```
+
+Go 版重写并完善 Python 版，两者在同一仓库中保留，便于迁移和对照；前端目前存在差异。
 
 ## 快速开始
 
-### 独立 Web 版
+### Python 版
 
 ```bash
 # 安装
 pip install proxy-toolkit
 
-# 启动服务（仅在子路径环境下启动）
+# 启动服务
 python -m proxy_toolkit --port 3000
 
 # 或使用命令
 proxy-toolkit --port 3000
 ```
 
-### JupyterLab 扩展
+### Go 版
 
 ```bash
-# 安装（会自动安装 proxy-toolkit 依赖）
-pip install jupyterlab-proxy-toolkit
-
-# 需要 jupyter-server-proxy
-pip install jupyter-server-proxy
-
-# 验证
-jupyter labextension list
+cd proxy_toolkit_go
+go run . --port 8080
 ```
 
-### VS Code 扩展
-
-在 Code Server 环境中安装 `.vsix` 文件。
-
-**启用条件**：
-- `VSCODE_PROXY_URI` 环境变量存在
-- 模板包含子路径（如 `/proxy/{{port}}/`）
+机制与构建方式见 [Go 设计说明](proxy_toolkit_go/DESIGN.md)。
 
 ## 开发指南
 
@@ -103,61 +80,11 @@ uv run python -m build --wheel --no-isolation
 # 生成 dist/proxy_toolkit-0.1.0-py3-none-any.whl
 ```
 
-### 构建 JupyterLab 扩展
-
-```bash
-cd jupyterlab-proxy-toolkit
-npm install
-npm run prebuild
-npm run build:lib:prod
-cd ..
-uv run jupyter labextension build jupyterlab-proxy-toolkit
-uv run python -m build jupyterlab-proxy-toolkit --wheel --no-isolation
-# 生成 jupyterlab-proxy-toolkit/dist/jupyterlab_proxy_toolkit-0.1.0-py3-none-any.whl
-```
-
-### 构建 VS Code 扩展
-
-```bash
-cd vscode-proxy-toolkit
-npm install
-npm run build
-npm run package
-# 生成 vscode-proxy-toolkit-0.1.0.vsix
-```
-
-### 修改核心文件
-
-核心文件在 `proxy_toolkit/` 目录，修改后：
-- 独立 Web 版：直接生效
-- JupyterLab 扩展：重新构建 wheel
-- VS Code 扩展：运行 `npm run prebuild` 复制 JS 文件，然后重新构建
-
 ### 发布新版本
 
-1. 更新版本号（三处需要同步）：
-   - `proxy_toolkit/__init__.py` → `__version__ = "x.y.z"`
-   - `jupyterlab-proxy-toolkit/package.json` → `"version": "x.y.z"`
-   - `vscode-proxy-toolkit/package.json` → `"version": "x.y.z"`
+Python 包版本在 `pyproject.toml` 和 `proxy_toolkit/__init__.py` 中同步维护。推送 `v*` 标签或手动运行 Release 工作流时，构建并发布核心 wheel。
 
-2. 提交代码：
-   ```bash
-   git add -A
-   git commit -m "bump version to x.y.z"
-   ```
-
-3. 打 tag 并推送：
-   ```bash
-   git tag vx.y.z
-   git push origin main --tags
-   ```
-
-4. GitHub Actions 自动构建并发布到 Releases：
-   - `proxy_toolkit-x.y.z-py3-none-any.whl`
-   - `jupyterlab_proxy_toolkit-x.y.z-py3-none-any.whl`
-   - `vscode-proxy-toolkit-x.y.z.vsix`
-
-## API 接口
+## Python 版 API
 
 ```
 GET   /                              # 主界面

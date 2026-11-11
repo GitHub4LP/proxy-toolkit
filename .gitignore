@@ -184,23 +184,16 @@ cython_debug/
 .python-version
 **/uv.lock
 
-# ==================== 扩展构建产物 ====================
-
-# JupyterLab 扩展 - 构建产物
-jupyterlab-proxy-toolkit/jupyterlab_proxy_toolkit/labextension/
-jupyterlab-proxy-toolkit/jupyterlab_proxy_toolkit/_version.py
-jupyterlab-proxy-toolkit/lib/
-jupyterlab-proxy-toolkit/LICENSE
-
-# VS Code 扩展 - 构建产物
-vscode-proxy-toolkit/resources/
-vscode-proxy-toolkit/dist/
-vscode-proxy-toolkit/LICENSE
-
 # 通用忽略
 **/node_modules/
 **/package-lock.json
 **/yarn.lock
-**/tsconfig.tsbuildinfo
-**/*.vsix
 **/.kiro/
+
+# Local reference checkouts
+/refs/
+
+# Go
+proxy_toolkit_go/proxy-toolkit.exe
+proxy_toolkit_go/proxy-toolkit
+proxy_toolkit_go/proxy_toolkit_linux_amd64

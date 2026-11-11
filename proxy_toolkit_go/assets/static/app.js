@@ -1,0 +1,873 @@
+// Port management service frontend app
+// 依赖: sw_client.js (需要在 HTML 中先加载)
+
+class PortApp {
+    constructor() {
+        this.basePath = this.getBasePath();
+        
+        // 端口列表（localStorage 持久化）
+        this.ports = new Set();
+        this.loadPorts();
+        
+        // Service Worker 状态
+        this.serviceWorkerStates = new Map();
+        this.portStrategies = new Map();
+        this.swConfiguredPorts = new Set();
+        this.deletingPorts = new Set();
+        
+        // 代理检测结果
+        this.proxyDecodeDepth = 0;
+        this.slashExtraDecoding = false;
+
+        // WebSocket 降级（自动检测，按模板缓存）
+        this.wsFallback = false;
+
+        // 本服务端口（从 API 获取）
+        this.servicePort = null;
+
+        // URL template
+        this.urlTemplate = null;
+        this.hasProxySupport = false;
+        this.templateRegex = null;
+
+        // 手动代理模板（localStorage 持久化，优先于自动检测）
+        this.manualProxyTemplate = this.loadManualTemplate();
+        this.templateSource = 'auto'; // 'auto' | 'manual'
+
+        this.loadPortStrategies();
+        this.initServiceWorkerSupport();
+        this.setupTemplateBar();
+        this.initializeApp();
+
+        setInterval(() => this.refreshPorts(), 5000);
+    }
+
+    // ==================== 端口持久化 ====================
+    
+    loadPorts() {
+        try {
+            const saved = localStorage.getItem('forwarded_ports');
+            if (saved) {
+                const arr = JSON.parse(saved);
+                this.ports = new Set(arr.filter(p => Number.isInteger(p) && p > 0 && p <= 65535));
+            }
+        } catch { }
+    }
+
+    savePorts() {
+        try {
+            localStorage.setItem('forwarded_ports', JSON.stringify([...this.ports]));
+        } catch { }
+    }
+
+    addPortToList(port) {
+        if (port > 0 && port <= 65535) {
+            this.ports.add(port);
+            this.savePorts();
+        }
+    }
+
+    removePortFromList(port) {
+        this.ports.delete(port);
+        this.savePorts();
+    }
+
+    // ==================== 路径推导 ====================
+
+    /**
+     * 从 location.pathname 提取目录部分（去掉文件名和尾部 /）
+     * 与 auto 模板推导共用同一逻辑，确保 basePath 与模板路径一致
+     */
+    getBasePath() {
+        const path = window.location.pathname;
+        let dir = path;
+        const lastSlash = path.lastIndexOf('/');
+        if (lastSlash < path.length - 1) {
+            dir = path.substring(0, lastSlash + 1);
+        }
+        return dir.replace(/\/$/, '');
+    }
+
+    // ==================== 检测路径推导 ====================
+
+    /**
+     * 获取检测端点基础路径
+     * - auto 模板：直接走 basePath
+     * - manual 模板：走模板路径（替换 {{port}} 为本服务端口）
+     */
+    getDetectionBase() {
+        if (this.templateSource === 'manual' && this.servicePort) {
+            const templatePath = SwClient.extractTemplatePath(this.urlTemplate);
+            return templatePath.replace('{{port}}', this.servicePort).replace(/\/$/, '');
+        }
+        return this.basePath;
+    }
+
+    // ==================== WebSocket 降级自动检测 ====================
+
+    async detectWsSupport() {
+        // 缓存 key 按模板区分
+        const cacheKey = 'ws_support_' + this.urlTemplate;
+        try {
+            const cached = sessionStorage.getItem(cacheKey);
+            if (cached !== null) {
+                this.wsFallback = cached === 'false';
+                console.log('[WS Probe] Cached:', cacheKey, '→ wsFallback:', this.wsFallback);
+                return;
+            }
+        } catch { }
+
+        // 探测 URL：auto 模板走直连，manual 模板走模板路径
+        const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const probeUrl = wsProto + '//' + window.location.host + this.getDetectionBase() + '/api/ws-probe';
+
+        this.wsFallback = await new Promise(resolve => {
+            const ws = new WebSocket(probeUrl);
+            const timer = setTimeout(() => {
+                ws.onopen = null;
+                ws.onerror = null;
+                try { ws.close(); } catch { }
+                resolve(true); // 超时 → 降级
+            }, 2000);
+
+            ws.onopen = () => {
+                clearTimeout(timer);
+                ws.close();
+                resolve(false); // WS 可用 → 不降级
+            };
+
+            ws.onerror = () => {
+                clearTimeout(timer);
+                resolve(true); // 失败 → 降级
+            };
+        });
+
+        try { sessionStorage.setItem(cacheKey, String(!this.wsFallback)); } catch { }
+        console.log('[WS Probe] Detected:', probeUrl, '→ wsFallback:', this.wsFallback);
+    }
+
+    // ==================== 手动代理模板 ====================
+
+    loadManualTemplate() {
+        try {
+            return localStorage.getItem('manual_proxy_template') || null;
+        } catch { return null; }
+    }
+
+    saveManualTemplate(template) {
+        try {
+            if (template) {
+                localStorage.setItem('manual_proxy_template', template);
+            } else {
+                localStorage.removeItem('manual_proxy_template');
+            }
+        } catch { }
+        this.manualProxyTemplate = template || null;
+    }
+
+    async setProxyTemplate(template) {
+        // 验证模板：必须含 {{port}}
+        if (template && !template.includes('{{port}}')) {
+            console.warn('[Template] Must contain {{port}}');
+            return false;
+        }
+        this.saveManualTemplate(template);
+        // 重新加载模板
+        await this.loadUrlTemplate();
+        // 模板变更后重新检测编码和 WS 支持（不同模板可能走不同代理路径）
+        if (this.hasProxySupport) {
+            await this.detectEncoding();
+            await this.detectWsSupport();
+            // 重新配置所有已注册 SW
+            this.serviceWorkerStates.forEach((swState, port) => {
+                if (swState.registration?.active) {
+                    const strategy = this.getPortStrategy(port);
+                    if (strategy !== 'none') {
+                        this.sendSwConfig(swState.registration.active, strategy);
+                    }
+                }
+            });
+        }
+        await this.refreshPorts();
+        return true;
+    }
+
+    // ==================== 初始化 ====================
+
+    async initializeApp() {
+        await this.loadUrlTemplate();
+        // 从 API 获取本服务端口
+        try {
+            const resp = await fetch(`${this.basePath}/api/service-info`);
+            const info = await resp.json();
+            this.servicePort = info.port;
+        } catch (e) {
+            console.error('[ServiceInfo] Failed:', e);
+        }
+        if (this.hasProxySupport) {
+            await this.detectEncoding();
+            await this.detectWsSupport();
+        }
+        this.setupPortInput();
+        await this.syncServiceWorkers();
+        await this.refreshPorts();
+    }
+
+    async loadUrlTemplate() {
+        // 优先使用手动模板
+        if (this.manualProxyTemplate) {
+            this.urlTemplate = this.manualProxyTemplate;
+            this.templateSource = 'manual';
+        } else {
+            // auto 模板 = basePath + /proxy/{{port}}/
+            this.urlTemplate = this.basePath + '/proxy/{{port}}/';
+            this.templateSource = 'auto';
+        }
+
+        if (this.urlTemplate) {
+            this.templateRegex = SwClient.compileTemplateRegex(this.urlTemplate);
+        } else {
+            this.templateRegex = null;
+        }
+        this.updateSwEnabled();
+        this.renderTemplateBar();
+    }
+
+    updateSwEnabled() {
+        // hasProxySupport: 有模板（手动或自动）即 true
+        this.hasProxySupport = !!this.urlTemplate;
+        // SW 需要浏览器支持 + 模板有子路径
+        const hasSubpath = this.urlTemplate ? SwClient.hasSubpath(this.urlTemplate) : false;
+        this.swEnabled = this.swSupported && hasSubpath;
+    }
+
+    async detectEncoding() {
+        const testEndpoint = this.getDetectionBase() + '/api/test-encoding';
+        const cacheKey = 'encoding_' + this.urlTemplate;
+        const result = await SwClient.detectProxyEncoding(testEndpoint, { cacheKey });
+        this.proxyDecodeDepth = result.decodeDepth;
+        this.slashExtraDecoding = result.slashExtraDecoding;
+    }
+
+    initServiceWorkerSupport() {
+        this.swSupported = 'serviceWorker' in navigator;
+        this.swEnabled = false; // 由 updateSwEnabled() 设置
+    }
+
+    setupPortInput() {
+        const addPortBtn = document.getElementById('addPortBtn');
+        const addPortInput = document.getElementById('addPortInput');
+        if (!addPortBtn || !addPortInput) return;
+
+        addPortBtn.addEventListener('click', () => {
+            addPortBtn.style.display = 'none';
+            addPortInput.style.display = 'block';
+            addPortInput.focus();
+        });
+
+        addPortInput.addEventListener('blur', () => {
+            if (!addPortInput.value) {
+                addPortInput.style.display = 'none';
+                addPortBtn.style.display = 'flex';
+            }
+        });
+
+        addPortInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') this.addPort();
+        });
+    }
+
+    // ==================== 模板栏 UI ====================
+
+    renderTemplateBar() {
+        const bar = document.getElementById('templateBar');
+        if (!bar) return;
+
+        const display = document.getElementById('templateDisplay');
+        const badge = document.getElementById('templateBadge');
+        const editBtn = document.getElementById('templateEditBtn');
+        if (!display || !badge || !editBtn) return;
+
+        if (this.urlTemplate) {
+            display.textContent = this.urlTemplate;
+            display.style.display = 'inline';
+            editBtn.style.display = 'inline-block';
+        } else {
+            display.textContent = 'No proxy detected';
+            display.style.display = 'inline';
+            editBtn.style.display = 'inline-block';
+        }
+
+        badge.textContent = this.templateSource === 'manual' ? 'Manual' : 'Auto';
+        badge.classList.toggle('manual', this.templateSource === 'manual');
+    }
+
+    setupTemplateBar() {
+        const editBtn = document.getElementById('templateEditBtn');
+        const editArea = document.getElementById('templateEditArea');
+        const editInput = document.getElementById('templateInput');
+        const saveBtn = document.getElementById('templateSaveBtn');
+        const cancelBtn = document.getElementById('templateCancelBtn');
+        const clearBtn = document.getElementById('templateClearBtn');
+        if (!editBtn || !editInput) return;
+
+        editBtn.addEventListener('click', () => {
+            editInput.value = this.manualProxyTemplate || this.urlTemplate || '';
+            editBtn.style.display = 'none';
+            editArea.style.display = 'flex';
+            editInput.focus();
+        });
+
+        const closeEdit = () => {
+            editArea.style.display = 'none';
+            editBtn.style.display = 'inline-block';
+        };
+
+        saveBtn?.addEventListener('click', () => {
+            const val = editInput.value.trim();
+            if (val && !val.includes('{{port}}')) {
+                editInput.style.borderColor = '#f44336';
+                return;
+            }
+            editInput.style.borderColor = '';
+            this.setProxyTemplate(val || null);
+            closeEdit();
+        });
+
+        cancelBtn?.addEventListener('click', closeEdit);
+
+        clearBtn?.addEventListener('click', () => {
+            this.setProxyTemplate(null);
+            closeEdit();
+        });
+
+        editInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') saveBtn?.click();
+            if (e.key === 'Escape') closeEdit();
+        });
+    }
+
+    // ==================== URL 模板处理 ====================
+
+    generateProxyUrlForPort(port) {
+        return SwClient.generateProxyUrl(this.urlTemplate, port);
+    }
+
+    getAbsoluteUrl(url) {
+        if (url.startsWith('/')) {
+            return window.location.protocol + '//' + window.location.host + url;
+        }
+        return url;
+    }
+
+    // ==================== Service Worker 管理 ====================
+
+    isOurServiceWorker(scriptURL) {
+        if (!scriptURL) return false;
+        try {
+            const expectedScriptPrefix = `${window.location.origin}${this.basePath}/`;
+            if (!scriptURL.startsWith(expectedScriptPrefix)) return false;
+            const scriptName = scriptURL.substring(expectedScriptPrefix.length);
+            return scriptName.startsWith('unified_service_worker.js');
+        } catch {
+            return false;
+        }
+    }
+
+    extractPortFromScope(scope) {
+        if (!this.templateRegex) return null;
+        const normalizedScope = SwClient.normalizeUrl(scope);
+        const match = normalizedScope.match(this.templateRegex);
+        return (match && match[1]) ? parseInt(match[1]) : null;
+    }
+
+    async syncServiceWorkers() {
+        if (!('serviceWorker' in navigator) || !this.hasProxySupport) return;
+
+        try {
+            // 使用 sw_client.js 获取注册列表
+            const registrations = await SwClient.getRegistrations();
+            const foundPorts = new Set();
+
+            for (const registration of registrations) {
+                const scriptURL = registration.active?.scriptURL ||
+                    registration.waiting?.scriptURL ||
+                    registration.installing?.scriptURL || '';
+
+                if (!this.isOurServiceWorker(scriptURL)) continue;
+
+                const port = this.extractPortFromScope(registration.scope);
+                if (port && !this.deletingPorts.has(port)) {
+                    foundPorts.add(port);
+                    
+                    // 同步到端口列表
+                    this.addPortToList(port);
+                    
+                    const state = registration.active ? 'active' :
+                        registration.waiting ? 'waiting' :
+                            registration.installing ? 'installing' : 'unknown';
+
+                    this.serviceWorkerStates.set(port, {
+                        registered: true,
+                        loading: false,
+                        scope: SwClient.normalizeUrl(registration.scope),
+                        registration: registration,
+                        state: state
+                    });
+                    
+                    // 恢复配置
+                    if (registration.active && !this.swConfiguredPorts.has(port)) {
+                        const savedStrategy = this.getPortStrategy(port);
+                        if (savedStrategy && savedStrategy !== 'none') {
+                            this.sendSwConfig(registration.active, savedStrategy);
+                            this.swConfiguredPorts.add(port);
+                        }
+                    }
+                }
+            }
+            
+            // 清理已注销的 SW 状态
+            for (const port of this.serviceWorkerStates.keys()) {
+                if (!foundPorts.has(port)) {
+                    this.serviceWorkerStates.delete(port);
+                    this.swConfiguredPorts.delete(port);
+                }
+            }
+        } catch (error) {
+            console.error('[SW] Sync failed:', error);
+        }
+    }
+
+    async sendSwConfig(worker, strategy) {
+        // 使用 sw_client.js 配置 SW（等待 SW 确认）
+        await SwClient.configureServiceWorker(worker, {
+            strategy: strategy,
+            decodeDepth: this.proxyDecodeDepth,
+            slashExtraDecoding: this.slashExtraDecoding,
+            urlTemplate: this.urlTemplate,
+            wsFallback: this.wsFallback || false
+        });
+    }
+
+    async registerPortServiceWorker(port) {
+        if (!this.swEnabled) return;
+
+        const proxyUrl = this.generateProxyUrlForPort(port);
+        if (!proxyUrl) return;
+
+        let scope = proxyUrl;
+        if (!scope.endsWith('/')) scope += '/';
+
+        const swScriptPath = `${this.basePath}/unified_service_worker.js`;
+
+        try {
+            // 使用 sw_client.js 注册 SW
+            const registration = await SwClient.registerServiceWorker(swScriptPath, scope);
+
+            this.serviceWorkerStates.set(port, {
+                registered: true,
+                loading: false,
+                scope: scope,
+                registration: registration,
+                state: 'active'
+            });
+        } catch (error) {
+            console.error(`[SW Register] Failed for port ${port}:`, error);
+            throw error;
+        }
+    }
+
+    async unregisterServiceWorker(scope) {
+        // 使用 sw_client.js 注销 SW
+        await SwClient.unregisterServiceWorker(scope);
+    }
+
+    // ==================== 策略管理 ====================
+
+    loadPortStrategies() {
+        try {
+            const saved = localStorage.getItem('port_strategies');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                this.portStrategies = new Map(Object.entries(parsed).map(([k, v]) => [parseInt(k), v]));
+            }
+        } catch { }
+    }
+
+    savePortStrategies() {
+        try {
+            const obj = Object.fromEntries(this.portStrategies);
+            localStorage.setItem('port_strategies', JSON.stringify(obj));
+        } catch { }
+    }
+
+    getPortStrategy(port) {
+        return this.portStrategies.get(port) || 'none';
+    }
+
+    updatePortStrategy(port, mode) {
+        this.portStrategies.set(port, mode);
+        this.savePortStrategies();
+    }
+
+    clearPortStrategy(port) {
+        this.portStrategies.delete(port);
+        this.savePortStrategies();
+    }
+
+    /**
+     * 获取端口的实际模式（从 SW 查询）
+     */
+    async getPortMode(port) {
+        const swState = this.serviceWorkerStates.get(port);
+        if (!swState || !swState.registered || !swState.registration?.active) {
+            return 'none';
+        }
+        
+        // 从 SW 查询真实配置
+        const config = await SwClient.getServiceWorkerConfig(swState.registration.active);
+        if (config && config.strategy) {
+            // 同步到本地存储
+            if (config.strategy !== 'none') {
+                this.portStrategies.set(port, config.strategy);
+            }
+            return config.strategy;
+        }
+        
+        // 查询失败，回退到本地存储
+        return this.getPortStrategy(port);
+    }
+
+    /**
+     * 同步获取端口模式（用于 UI 渲染，不阻塞）
+     */
+    getPortModeSync(port) {
+        const swState = this.serviceWorkerStates.get(port);
+        if (!swState || !swState.registered) return 'none';
+        return this.getPortStrategy(port);
+    }
+
+    // ==================== 端口操作 ====================
+
+    async addPort() {
+        const portInput = document.getElementById('addPortInput');
+        const port = parseInt(portInput.value);
+        if (!port || port < 1 || port > 65535) return;
+
+        try {
+            // 1. 添加到持久化列表
+            this.addPortToList(port);
+            
+            // 2. 注册 SW（如果支持）
+            if (this.hasProxySupport) {
+                await this.registerPortServiceWorker(port);
+            }
+            
+            // 3. 重置输入
+            portInput.value = '';
+            portInput.style.display = 'none';
+            document.getElementById('addPortBtn').style.display = 'flex';
+            
+            await this.refreshPorts();
+        } catch (error) {
+            console.error('[Add Port] Failed:', error);
+        }
+    }
+
+    async stopForwarding(port) {
+        console.log(`[Stop Forwarding] Port ${port}`);
+        
+        this.deletingPorts.add(port);
+        const swState = this.serviceWorkerStates.get(port);
+        
+        // 清理状态
+        this.removePortFromList(port);
+        this.clearPortStrategy(port);
+        this.serviceWorkerStates.delete(port);
+        this.swConfiguredPorts.delete(port);
+        
+        // 立即刷新 UI
+        this.refreshPorts();
+        
+        // 异步注销 SW
+        if (swState && swState.scope) {
+            this.unregisterServiceWorker(swState.scope)
+                .finally(() => this.deletingPorts.delete(port));
+        } else {
+            this.deletingPorts.delete(port);
+        }
+    }
+
+    async switchPortMode(port, newMode) {
+        const currentMode = this.getPortMode(port);
+        if (currentMode === newMode) return;
+
+        console.log(`[Mode Switch] Port ${port}: ${currentMode} -> ${newMode}`);
+        this.setLoadingState(port, true);
+
+        try {
+            this.swConfiguredPorts.delete(port);
+            
+            if (newMode === 'none') {
+                this.clearPortStrategy(port);
+                const swState = this.serviceWorkerStates.get(port);
+                if (swState?.registration?.active) {
+                    await SwClient.configureServiceWorker(swState.registration.active, {
+                        strategy: 'none',
+                        decodeDepth: 0,
+                        slashExtraDecoding: false,
+                        wsFallback: false
+                    });
+                }
+                // 清理本地状态
+                this.serviceWorkerStates.delete(port);
+                this.swConfiguredPorts.delete(port);
+            } else {
+                this.updatePortStrategy(port, newMode);
+                
+                let swState = this.serviceWorkerStates.get(port);
+                if (!swState?.registered) {
+                    await this.registerPortServiceWorker(port);
+                    swState = this.serviceWorkerStates.get(port);
+                }
+                
+                if (swState?.registration?.active) {
+                    await this.sendSwConfig(swState.registration.active, newMode);
+                    this.swConfiguredPorts.add(port);
+                }
+            }
+        } catch (error) {
+            console.error(`[Mode Switch] Failed for port ${port}:`, error);
+        } finally {
+            this.setLoadingState(port, false);
+            this.refreshPorts();
+        }
+    }
+
+    setLoadingState(port, loading) {
+        const currentState = this.serviceWorkerStates.get(port) || {};
+        this.serviceWorkerStates.set(port, { ...currentState, loading: loading });
+    }
+
+    // ==================== 刷新与渲染 ====================
+
+    async refreshPorts() {
+        try {
+            await this.syncServiceWorkers();
+            
+            const portList = [...this.ports];
+            if (portList.length === 0) {
+                this.displayPorts([]);
+                return;
+            }
+
+            // 批量查询后端
+            const response = await fetch(`${this.basePath}/api/ports/batch`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ports: portList })
+            });
+            
+            const portInfos = await response.json();
+            this.displayPorts(portInfos);
+        } catch (error) {
+            console.error('Refresh ports failed:', error);
+        }
+    }
+
+    displayPorts(ports) {
+        const tbody = document.getElementById('portTableBody');
+        const emptyState = document.getElementById('emptyState');
+        const allPorts = this.mergePortData(ports);
+
+        if (allPorts.length === 0) {
+            tbody.innerHTML = '';
+            emptyState.style.display = 'block';
+            return;
+        }
+
+        emptyState.style.display = 'none';
+
+        // 检查用户是否正在交互
+        const activeElement = document.activeElement;
+        const isInteracting = activeElement && tbody.contains(activeElement) &&
+            ['SELECT', 'BUTTON', 'INPUT'].includes(activeElement.tagName);
+
+        if (isInteracting) return;
+
+        this.updatePortsIncremental(tbody, allPorts);
+    }
+
+    mergePortData(ports) {
+        const portMap = new Map(ports.map(p => [p.port, p]));
+        
+        // 确保所有持久化的端口都显示
+        for (const port of this.ports) {
+            if (!portMap.has(port)) {
+                portMap.set(port, {
+                    port: port,
+                    is_listening: false,
+                    process_name: null,
+                    process_pid: null,
+                    process_cmdline: null,
+                });
+            }
+        }
+
+        // 统一用前端模板生成 proxy_url（后端可能无模板）
+        const generatedUrl = (p) => this.generateProxyUrlForPort(p);
+
+        return Array.from(portMap.values())
+            .map(p => ({
+                ...p,
+                proxy_url: generatedUrl(p.port) || p.proxy_url || '',
+                has_service_worker: this.serviceWorkerStates.has(p.port),
+                sw_state: this.serviceWorkerStates.get(p.port)?.state
+            }))
+            .sort((a, b) => a.port - b.port);
+    }
+
+    updatePortsIncremental(tbody, allPorts) {
+        const existingRows = new Map();
+        tbody.querySelectorAll('tr[data-port]').forEach(row => {
+            existingRows.set(parseInt(row.dataset.port), row);
+        });
+
+        const newPortsMap = new Map(allPorts.map(p => [p.port, p]));
+
+        // 删除不存在的
+        existingRows.forEach((row, port) => {
+            if (!newPortsMap.has(port)) row.remove();
+        });
+
+        // 添加或更新
+        allPorts.forEach((portData, index) => {
+            const existingRow = existingRows.get(portData.port);
+
+            if (!existingRow) {
+                const newRow = this.createPortRowElement(portData);
+                if (index === 0) {
+                    tbody.prepend(newRow);
+                } else {
+                    const prevPort = allPorts[index - 1];
+                    const prevRow = tbody.querySelector(`tr[data-port="${prevPort.port}"]`);
+                    prevRow ? prevRow.after(newRow) : tbody.appendChild(newRow);
+                }
+            } else {
+                this.updatePortRowIfNeeded(existingRow, portData);
+            }
+        });
+    }
+
+    createPortRowElement(portData) {
+        const tr = document.createElement('tr');
+        tr.dataset.port = portData.port;
+        tr.innerHTML = this.renderPortRowContent(portData);
+        return tr;
+    }
+
+    renderPortRowContent(port) {
+        const isListening = port.is_listening;
+        const processInfo = this.formatProcessInfo(port);
+        const proxyUrl = port.proxy_url || '';
+        const absoluteUrl = proxyUrl ? this.getAbsoluteUrl(proxyUrl) : '#';
+        const swModeSelect = this.renderProxyModeSelect(port);
+
+        return `
+            <td class="col-port">
+                <div class="port-cell-content">
+                    <span>
+                        <span class="status-dot ${isListening ? 'active' : ''}"></span>
+                        ${port.port}
+                    </span>
+                    <button class="action-btn" title="Stop Forwarding" onclick="app.stopForwarding(${port.port})">×</button>
+                </div>
+            </td>
+            <td class="col-address">
+                ${proxyUrl ? `<a href="${absoluteUrl}" target="_blank" class="address-link">${proxyUrl}</a>` : ''}
+            </td>
+            <td class="col-proxy-mode">
+                ${swModeSelect}
+            </td>
+            <td class="col-process">
+                <span class="process-info">${this.escapeHtml(processInfo)}</span>
+            </td>
+        `;
+    }
+
+    renderProxyModeSelect(port) {
+        if (!this.swEnabled || !port.proxy_url) return '';
+
+        const currentMode = this.getPortModeSync(port.port);
+        const swState = this.serviceWorkerStates.get(port.port) || { loading: false };
+
+        if (swState.loading) {
+            return '<span class="process-info">Updating...</span>';
+        }
+
+        return `
+            <select class="proxy-mode-select" onchange="app.switchPortMode(${port.port}, this.value)">
+                <option value="none" ${currentMode === 'none' ? 'selected' : ''}>None</option>
+                <option value="subpath" ${currentMode === 'subpath' ? 'selected' : ''}>Subpath</option>
+                <option value="tunnel" ${currentMode === 'tunnel' ? 'selected' : ''}>Tunnel</option>
+                <option value="hybrid" ${currentMode === 'hybrid' ? 'selected' : ''}>Hybrid</option>
+            </select>
+        `;
+    }
+
+    updatePortRowIfNeeded(row, newData) {
+        // 更新状态点
+        const statusDot = row.querySelector('.status-dot');
+        if (statusDot) {
+            statusDot.classList.toggle('active', newData.is_listening);
+        }
+
+        // 更新代理 URL
+        const addressCell = row.querySelector('.col-address');
+        if (addressCell) {
+            const proxyUrl = newData.proxy_url || '';
+            const absoluteUrl = proxyUrl ? this.getAbsoluteUrl(proxyUrl) : '#';
+            const newHtml = proxyUrl ? `<a href="${absoluteUrl}" target="_blank" class="address-link">${proxyUrl}</a>` : '';
+            if (addressCell.innerHTML.trim() !== newHtml) {
+                addressCell.innerHTML = newHtml;
+            }
+        }
+
+        // 更新 Proxy Mode（避免打断交互）
+        const proxyModeCell = row.querySelector('.col-proxy-mode');
+        const proxyModeSelect = proxyModeCell?.querySelector('select');
+        if (proxyModeCell && document.activeElement !== proxyModeSelect) {
+            const newModeHtml = this.renderProxyModeSelect(newData);
+            if (proxyModeCell.innerHTML.trim() !== newModeHtml.trim()) {
+                proxyModeCell.innerHTML = newModeHtml;
+            }
+        }
+
+        // 更新进程信息
+        const processCell = row.querySelector('.col-process .process-info');
+        if (processCell) {
+            const newProcessInfo = this.formatProcessInfo(newData);
+            if (processCell.textContent !== newProcessInfo) {
+                processCell.textContent = newProcessInfo;
+            }
+        }
+    }
+
+    formatProcessInfo(port) {
+        if (!port.is_listening) return '';
+        const pid = port.process_pid || '';
+        const cmd = port.process_cmdline || port.process_name;
+        if (!cmd) return 'Listening';
+        return pid ? `(${pid}) ${cmd}` : cmd;
+    }
+
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+}
+
+// Initialize
+const app = new PortApp();
+window.app = app;

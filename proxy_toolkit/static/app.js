@@ -24,8 +24,13 @@ class PortApp {
         this.hasProxySupport = false;
         this.templateRegex = null;
 
+        // 手动代理模板（localStorage 持久化，优先于自动检测）
+        this.manualProxyTemplate = this.loadManualTemplate();
+        this.templateSource = 'auto'; // 'auto' | 'manual'
+
         this.loadPortStrategies();
         this.initServiceWorkerSupport();
+        this.setupTemplateBar();
         this.initializeApp();
 
         setInterval(() => this.refreshPorts(), 5000);
@@ -61,6 +66,39 @@ class PortApp {
         this.savePorts();
     }
 
+    // ==================== 手动代理模板 ====================
+
+    loadManualTemplate() {
+        try {
+            return localStorage.getItem('manual_proxy_template') || null;
+        } catch { return null; }
+    }
+
+    saveManualTemplate(template) {
+        try {
+            if (template) {
+                localStorage.setItem('manual_proxy_template', template);
+            } else {
+                localStorage.removeItem('manual_proxy_template');
+            }
+        } catch { }
+        this.manualProxyTemplate = template || null;
+    }
+
+    setProxyTemplate(template) {
+        // 验证模板：必须含 {{port}}
+        if (template && !template.includes('{{port}}')) {
+            console.warn('[Template] Must contain {{port}}');
+            return false;
+        }
+        this.saveManualTemplate(template);
+        // 重新加载
+        this.loadUrlTemplate().then(() => {
+            this.refreshPorts();
+        });
+        return true;
+    }
+
     // ==================== 初始化 ====================
 
     async initializeApp() {
@@ -74,21 +112,39 @@ class PortApp {
     }
 
     async loadUrlTemplate() {
-        try {
-            const response = await fetch(`${this.basePath}/api/url-template`);
-            const data = await response.json();
-            this.urlTemplate = data.template;
-            this.hasProxySupport = data.has_proxy_support;
-            if (this.urlTemplate) {
-                this.templateRegex = SwClient.compileTemplateRegex(this.urlTemplate);
+        // 优先使用手动模板
+        if (this.manualProxyTemplate) {
+            this.urlTemplate = this.manualProxyTemplate;
+            this.templateSource = 'manual';
+        } else {
+            // 回退到后端自动检测
+            try {
+                const response = await fetch(`${this.basePath}/api/url-template`);
+                const data = await response.json();
+                this.urlTemplate = data.template || null;
+                this.templateSource = 'auto';
+            } catch (error) {
+                console.warn('[Template] Load failed:', error);
+                this.urlTemplate = null;
+                this.templateSource = 'auto';
             }
-            this.swEnabled = this.swSupported && this.isSubpath && this.hasProxySupport;
-        } catch (error) {
-            console.warn('[Template] Load failed:', error);
-            this.urlTemplate = null;
-            this.hasProxySupport = false;
-            this.swEnabled = false;
         }
+
+        if (this.urlTemplate) {
+            this.templateRegex = SwClient.compileTemplateRegex(this.urlTemplate);
+        } else {
+            this.templateRegex = null;
+        }
+        this.updateSwEnabled();
+        this.renderTemplateBar();
+    }
+
+    updateSwEnabled() {
+        // hasProxySupport: 有模板（手动或自动）即 true
+        this.hasProxySupport = !!this.urlTemplate;
+        // SW 需要浏览器支持 + 模板有子路径
+        const hasSubpath = this.urlTemplate ? SwClient.hasSubpath(this.urlTemplate) : false;
+        this.swEnabled = this.swSupported && hasSubpath;
     }
 
     async detectEncoding() {
@@ -101,8 +157,7 @@ class PortApp {
 
     initServiceWorkerSupport() {
         this.swSupported = 'serviceWorker' in navigator;
-        this.isSubpath = this.basePath !== '';
-        this.swEnabled = this.swSupported && this.isSubpath && this.hasProxySupport;
+        this.swEnabled = false; // 由 updateSwEnabled() 设置
     }
 
     setupPortInput() {
@@ -125,6 +180,76 @@ class PortApp {
 
         addPortInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.addPort();
+        });
+    }
+
+    // ==================== 模板栏 UI ====================
+
+    renderTemplateBar() {
+        const bar = document.getElementById('templateBar');
+        if (!bar) return;
+
+        const display = document.getElementById('templateDisplay');
+        const badge = document.getElementById('templateBadge');
+        const editBtn = document.getElementById('templateEditBtn');
+        if (!display || !badge || !editBtn) return;
+
+        if (this.urlTemplate) {
+            display.textContent = this.urlTemplate;
+            display.style.display = 'inline';
+            editBtn.style.display = 'inline-block';
+        } else {
+            display.textContent = 'No proxy detected';
+            display.style.display = 'inline';
+            editBtn.style.display = 'inline-block';
+        }
+
+        badge.textContent = this.templateSource === 'manual' ? 'Manual' : 'Auto';
+        badge.classList.toggle('manual', this.templateSource === 'manual');
+    }
+
+    setupTemplateBar() {
+        const editBtn = document.getElementById('templateEditBtn');
+        const editArea = document.getElementById('templateEditArea');
+        const editInput = document.getElementById('templateInput');
+        const saveBtn = document.getElementById('templateSaveBtn');
+        const cancelBtn = document.getElementById('templateCancelBtn');
+        const clearBtn = document.getElementById('templateClearBtn');
+        if (!editBtn || !editInput) return;
+
+        editBtn.addEventListener('click', () => {
+            editInput.value = this.manualProxyTemplate || this.urlTemplate || '';
+            editBtn.style.display = 'none';
+            editArea.style.display = 'flex';
+            editInput.focus();
+        });
+
+        const closeEdit = () => {
+            editArea.style.display = 'none';
+            editBtn.style.display = 'inline-block';
+        };
+
+        saveBtn?.addEventListener('click', () => {
+            const val = editInput.value.trim();
+            if (val && !val.includes('{{port}}')) {
+                editInput.style.borderColor = '#f44336';
+                return;
+            }
+            editInput.style.borderColor = '';
+            this.setProxyTemplate(val || null);
+            closeEdit();
+        });
+
+        cancelBtn?.addEventListener('click', closeEdit);
+
+        clearBtn?.addEventListener('click', () => {
+            this.setProxyTemplate(null);
+            closeEdit();
+        });
+
+        editInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') saveBtn?.click();
+            if (e.key === 'Escape') closeEdit();
         });
     }
 
@@ -219,12 +344,13 @@ class PortApp {
         }
     }
 
-    sendSwConfig(worker, strategy) {
-        // 使用 sw_client.js 配置 SW
-        SwClient.configureServiceWorker(worker, {
+    async sendSwConfig(worker, strategy) {
+        // 使用 sw_client.js 配置 SW（等待 SW 确认）
+        await SwClient.configureServiceWorker(worker, {
             strategy: strategy,
             decodeDepth: this.proxyDecodeDepth,
-            slashExtraDecoding: this.slashExtraDecoding
+            slashExtraDecoding: this.slashExtraDecoding,
+            urlTemplate: this.urlTemplate
         });
     }
 
@@ -391,12 +517,15 @@ class PortApp {
                 this.clearPortStrategy(port);
                 const swState = this.serviceWorkerStates.get(port);
                 if (swState?.registration?.active) {
-                    SwClient.configureServiceWorker(swState.registration.active, {
+                    await SwClient.configureServiceWorker(swState.registration.active, {
                         strategy: 'none',
                         decodeDepth: 0,
                         slashExtraDecoding: false
                     });
                 }
+                // 清理本地状态
+                this.serviceWorkerStates.delete(port);
+                this.swConfiguredPorts.delete(port);
             } else {
                 this.updatePortStrategy(port, newMode);
                 
@@ -407,7 +536,8 @@ class PortApp {
                 }
                 
                 if (swState?.registration?.active) {
-                    this.sendSwConfig(swState.registration.active, newMode);
+                    await this.sendSwConfig(swState.registration.active, newMode);
+                    this.swConfiguredPorts.add(port);
                 }
             }
         } catch (error) {
@@ -484,14 +614,17 @@ class PortApp {
                     process_name: null,
                     process_pid: null,
                     process_cmdline: null,
-                    proxy_url: this.generateProxyUrlForPort(port)
                 });
             }
         }
 
+        // 统一用前端模板生成 proxy_url（后端可能无模板）
+        const generatedUrl = (p) => this.generateProxyUrlForPort(p);
+
         return Array.from(portMap.values())
             .map(p => ({
                 ...p,
+                proxy_url: generatedUrl(p.port) || p.proxy_url || '',
                 has_service_worker: this.serviceWorkerStates.has(p.port),
                 sw_state: this.serviceWorkerStates.get(p.port)?.state
             }))
@@ -540,9 +673,9 @@ class PortApp {
     renderPortRowContent(port) {
         const isListening = port.is_listening;
         const processInfo = this.formatProcessInfo(port);
-        const proxyUrl = this.hasProxySupport && port.proxy_url ? port.proxy_url : '';
+        const proxyUrl = port.proxy_url || '';
         const absoluteUrl = proxyUrl ? this.getAbsoluteUrl(proxyUrl) : '#';
-        const swModeSelect = this.hasProxySupport ? this.renderProxyModeSelect(port) : '<span class="process-info">N/A</span>';
+        const swModeSelect = this.renderProxyModeSelect(port);
 
         return `
             <td class="col-port">
@@ -551,7 +684,7 @@ class PortApp {
                         <span class="status-dot ${isListening ? 'active' : ''}"></span>
                         ${port.port}
                     </span>
-                    ${this.hasProxySupport ? `<button class="action-btn" title="Stop Forwarding" onclick="app.stopForwarding(${port.port})">×</button>` : ''}
+                    <button class="action-btn" title="Stop Forwarding" onclick="app.stopForwarding(${port.port})">×</button>
                 </div>
             </td>
             <td class="col-address">
@@ -596,7 +729,7 @@ class PortApp {
         // 更新代理 URL
         const addressCell = row.querySelector('.col-address');
         if (addressCell) {
-            const proxyUrl = this.hasProxySupport && newData.proxy_url ? newData.proxy_url : '';
+            const proxyUrl = newData.proxy_url || '';
             const absoluteUrl = proxyUrl ? this.getAbsoluteUrl(proxyUrl) : '#';
             const newHtml = proxyUrl ? `<a href="${absoluteUrl}" target="_blank" class="address-link">${proxyUrl}</a>` : '';
             if (addressCell.innerHTML.trim() !== newHtml) {
@@ -608,7 +741,7 @@ class PortApp {
         const proxyModeCell = row.querySelector('.col-proxy-mode');
         const proxyModeSelect = proxyModeCell?.querySelector('select');
         if (proxyModeCell && document.activeElement !== proxyModeSelect) {
-            const newModeHtml = this.hasProxySupport ? this.renderProxyModeSelect(newData) : '<span class="process-info">N/A</span>';
+            const newModeHtml = this.renderProxyModeSelect(newData);
             if (proxyModeCell.innerHTML.trim() !== newModeHtml.trim()) {
                 proxyModeCell.innerHTML = newModeHtml;
             }
@@ -627,7 +760,8 @@ class PortApp {
     formatProcessInfo(port) {
         if (!port.is_listening) return '';
         const pid = port.process_pid || '';
-        const cmd = port.process_cmdline || port.process_name || 'Unknown';
+        const cmd = port.process_cmdline || port.process_name;
+        if (!cmd) return 'Listening';
         return pid ? `(${pid}) ${cmd}` : cmd;
     }
 

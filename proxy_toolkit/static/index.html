@@ -14,6 +14,18 @@
             <div class="title-section">
                 <span class="title">PORTS</span>
             </div>
+            <div id="templateBar" class="template-bar">
+                <span id="templateBadge" class="template-badge">Auto</span>
+                <span id="templateDisplay" class="template-display"></span>
+                <button id="templateEditBtn" class="template-edit-btn" type="button">Edit</button>
+                <div id="templateEditArea" class="template-edit-area" style="display: none;">
+                    <input type="text" id="templateInput" class="template-input"
+                        placeholder="/proxy/{{port}}/" size="30">
+                    <button id="templateSaveBtn" class="template-btn save" type="button">OK</button>
+                    <button id="templateCancelBtn" class="template-btn cancel" type="button">Cancel</button>
+                    <button id="templateClearBtn" class="template-btn clear" type="button">Clear</button>
+                </div>
+            </div>
         </div>
 
         <div class="table-container">

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ports</title>
+    <link rel="stylesheet" href="./static/style.css">
+</head>
+
+<body>
+    <div class="vscode-container">
+        <div class="header">
+            <div class="title-section">
+                <span class="title">PORTS</span>
+            </div>
+            <div id="templateBar" class="template-bar">
+                <span id="templateBadge" class="template-badge">Auto</span>
+                <span id="templateDisplay" class="template-display"></span>
+                <button id="templateEditBtn" class="template-edit-btn" type="button">Edit</button>
+                <div id="templateEditArea" class="template-edit-area" style="display: none;">
+                    <input type="text" id="templateInput" class="template-input"
+                        placeholder="/proxy/{{port}}/" size="30">
+                    <button id="templateSaveBtn" class="template-btn save" type="button">OK</button>
+                    <button id="templateCancelBtn" class="template-btn cancel" type="button">Cancel</button>
+                    <button id="templateClearBtn" class="template-btn clear" type="button">Clear</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="table-container">
+            <table class="ports-table">
+                <thead>
+                    <tr>
+                        <th class="col-port">Port</th>
+                        <th class="col-address">Forwarded Address</th>
+                        <th class="col-proxy-mode">Proxy Mode</th>
+                        <th class="col-process">Running Process</th>
+                    </tr>
+                </thead>
+                <tbody id="portTableBody">
+                    <!-- Rows injected by JS -->
+                </tbody>
+                <tfoot id="portTableFooter">
+                    <tr class="add-port-row" id="addPortRow">
+                        <td colspan="4">
+                            <div class="add-port-container">
+                                <button id="addPortBtn" class="add-port-btn" type="button">Forward a Port</button>
+                                <input type="number" id="addPortInput" class="add-port-input" placeholder="Port number"
+                                    min="1" max="65535" style="display: none;">
+                            </div>
+                        </td>
+                    </tr>
+                </tfoot>
+            </table>
+            <div id="emptyState" class="empty-state" style="display: none;">
+                No forwarded ports.
+            </div>
+        </div>
+    </div>
+
+    <script src="./sw_client.js"></script>
+    <script src="./static/app.js"></script>
+</body>
+
+</html>

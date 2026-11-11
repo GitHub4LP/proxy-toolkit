@@ -7,11 +7,31 @@ const scope = new URL(self.registration.scope).pathname;
 let strategy = 'none';
 let decodeDepth = 0;
 let slashExtraDecoding = false;
+let urlTemplate = '';
 
 // 工具函数
 
 function hasEncodedChars(str) {
     return /%[0-9A-Fa-f]{2}/.test(str);
+}
+
+// 从 scope 路径中用模板提取端口号
+function extractPortFromScope(scopePath, template) {
+    if (!template) return null;
+    // 提取路径部分（模板可能是绝对 URL）
+    let tplPath = template;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(template)) {
+        try { tplPath = new URL(template).pathname; } catch (e) { return null; }
+    }
+    // 构造正则：转义特殊字符，{{port}} → (\d+)
+    const escaped = tplPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const regexStr = escaped.replace('\\{\\{port\\}\\}', '(\\d+)');
+    const match = scopePath.match(new RegExp('^' + regexStr));
+    if (match && match[1]) {
+        const port = parseInt(match[1]);
+        if (port > 0 && port <= 65535) return port;
+    }
+    return null;
 }
 
 function longestCommonPathSegments(path1, path2) {
@@ -76,37 +96,60 @@ function copyProperties(source, target, properties) {
     }
 }
 
-const SubpathHandler = {
-    _cache: new Set(),
+// 预取缓存：307 重定向后的正确 URL → Promise<Response>
+const _prefetchCache = new Map();
 
+function startPrefetch(key, fetchFn) {
+    const promise = fetchFn();
+    _prefetchCache.set(key, promise);
+    setTimeout(() => { if (_prefetchCache.has(key)) _prefetchCache.delete(key); }, 5000);
+}
+
+// 构造 fetch init（提取公共逻辑）
+async function buildFetchInit(event) {
+    const init = {
+        method: event.request.method,
+        headers: new Headers(event.request.headers),
+        mode: event.request.mode,
+        credentials: event.request.credentials,
+        redirect: event.request.redirect
+    };
+    copyProperties(event.request, init, ['cache', 'integrity', 'keepalive', 'referrer', 'referrerPolicy']);
+    if (event.request.body && event.request.method !== 'GET' && event.request.method !== 'HEAD') {
+        init.body = await event.request.arrayBuffer();
+    }
+    return init;
+}
+
+const SubpathHandler = {
     handleFetch(event) {
         const url = new URL(event.request.url);
-        const cache = this._cache;
-
-        if (cache.has(event.request.url)) {
-            cache.delete(event.request.url);
-            return;
-        }
 
         let finalPathname = url.pathname;
         let needsProcessing = false;
-        
+
         if (decodeDepth > 0 && hasEncodedChars(finalPathname)) {
             finalPathname = selectiveMultiEncodePath(finalPathname);
             needsProcessing = true;
         }
-        
+
         const commonPath = longestCommonPathSegments(scope, finalPathname);
         if (commonPath !== scope) {
             finalPathname = finalPathname.replace(commonPath, scope);
             needsProcessing = true;
         }
-        
-        if (needsProcessing) {
-            url.pathname = finalPathname;
-            this._cache.add(url.href);
-            event.respondWith(Response.redirect(url.href, 307));
-        }
+
+        if (!needsProcessing) return;
+
+        url.pathname = finalPathname;
+        const correctedUrl = url.href;
+
+        startPrefetch(correctedUrl, async () => {
+            const init = await buildFetchInit(event);
+            return await fetch(correctedUrl, init);
+        });
+
+        event.respondWith(Response.redirect(correctedUrl, 307));
     }
 };
 
@@ -128,40 +171,20 @@ const TunnelHandler = {
             return;
         }
 
-        // 仅在需要时再计算脚本与作用域分段
-        const scriptPath = scriptUrl.pathname.replace('/unified_service_worker.js', '');
-        const scriptParts = scriptPath.split('/').filter(p => p !== '');
-        const scopeParts = scope.split('/').filter(p => p !== '');
-
-        // 校验脚本路径与作用域结构一致
-        if (scriptParts.length !== scopeParts.length) {
-            console.error('[Tunnel SW] 路径结构不匹配');
+        // 用模板从 scope 提取端口号
+        const port = extractPortFromScope(scope, urlTemplate);
+        if (!port) {
+            console.error('[Tunnel SW] 无法从 scope 提取端口号:', scope, urlTemplate);
             return;
         }
 
-        // 找出 scope 与 scriptPath 的差异段，应该只有端口号
-        let differenceIndex = -1;
-        let differenceCount = 0;
-        for (let i = 0; i < scriptParts.length; i++) {
-            if (scriptParts[i] !== scopeParts[i]) {
-                differenceIndex = i;
-                differenceCount++;
-            }
-        }
-        if (differenceCount !== 1) {
-            console.error(`[Tunnel SW] 预期只有一个差异，实际发现${differenceCount}个`);
-            return;
-        }
-
-        const port = parseInt(scopeParts[differenceIndex]);
-        if (isNaN(port) || port <= 0 || port > 65535) {
-            console.error('[Tunnel SW] 差异不是有效的端口号');
-            return;
-        }
-
-        // 计算目标路径：补全子路径不完整后，裁剪掉 scope 前缀得到余路径
+        // 计算修正路径（含编码修正）
         let finalPath = pathIncomplete ? pathname.replace(commonPath, scope) : pathname;
+        if (decodeDepth > 0 && hasEncodedChars(finalPath)) {
+            finalPath = selectiveMultiEncodePath(finalPath);
+        }
 
+        // 计算余路径（裁剪 scope 前缀）
         let remainder;
         if (scope.endsWith('/')) {
             remainder = finalPath.substring(scope.length - 1);
@@ -172,34 +195,22 @@ const TunnelHandler = {
             }
         }
 
-        // 构造路径隧道 URL（暂不考虑反向代理层对参数的解码）
+        // 构造隧道 API URL
+        const scriptPath = scriptUrl.pathname.replace('/unified_service_worker.js', '');
         const apiBase = scriptUrl.origin + scriptPath + `/api/http-tunnel/${port}`;
         const uParam = encodeURIComponent(remainder + url.search);
         const proxyUrl = `${apiBase}?u=${uParam}`;
 
-        const optionalProps = ['credentials', 'cache', 'redirect', 'referrer', 'referrerPolicy', 'integrity', 'keepalive'];
-        const init = {
-            method: event.request.method,
-            headers: new Headers(event.request.headers)
-        };
-        copyProperties(event.request, init, optionalProps);
+        // 构造 307 重定向 URL
+        const correctedUrl = url.origin + finalPath + url.search + url.hash;
 
-        event.respondWith((async () => {
-            try {
-                if (event.request.body && event.request.method !== 'GET' && event.request.method !== 'HEAD') {
-                    try {
-                        const arrayBuffer = await event.request.arrayBuffer();
-                        init.body = arrayBuffer;
-                    } catch (error) {
-                        console.warn('[Tunnel SW] 请求体读取失败:', error);
-                    }
-                }
-                return await fetch(proxyUrl, init);
-            } catch (error) {
-                console.error('[Tunnel SW] 隧道请求失败，回退原始请求:', error);
-                return fetch(event.request);
-            }
-        })());
+        // 预取隧道结果 + 307 重定向
+        startPrefetch(correctedUrl, async () => {
+            const init = await buildFetchInit(event);
+            return await fetch(proxyUrl, init);
+        });
+
+        event.respondWith(Response.redirect(correctedUrl, 307));
     }
 };
 
@@ -222,6 +233,7 @@ self.addEventListener('install', (event) => {
                 console.error(`[SW] Failed to load navigation interceptor:`, error);
                 throw error;
             }
+
             await self.skipWaiting();
         })()
     );
@@ -234,6 +246,8 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('message', (event) => {
     if (!event.data || !event.data.type) return;
 
+    const replyPort = event.ports && event.ports[0];
+
     if (event.data.type === 'CONFIGURE') {
         // 配置 SW 策略
         const oldStrategy = strategy;
@@ -242,17 +256,18 @@ self.addEventListener('message', (event) => {
         const newStrategy = event.data.data.strategy || 'none';
         const newDepth = event.data.data.decodeDepth || 0;
         const newSlashExtra = event.data.data.slashExtraDecoding || false;
-        
-        // 检查策略是否真的改变了
-        if (oldStrategy === newStrategy && oldDepth === newDepth && oldSlashExtra === newSlashExtra) {
-            // 策略未改变，静默返回
-            return;
-        }
+        const newTemplate = event.data.data.urlTemplate || '';
         
         // 更新策略
         strategy = newStrategy;
         decodeDepth = newDepth;
         slashExtraDecoding = newSlashExtra;
+        urlTemplate = newTemplate;
+
+        // none 时：navigate 前 fire-and-forget 注销自身
+        if (newStrategy === 'none') {
+            self.registration.unregister().catch(() => {});
+        }
         
         // 策略变更后自动刷新所有客户端
         self.clients.matchAll({
@@ -263,14 +278,18 @@ self.addEventListener('message', (event) => {
                 client.navigate(client.url).catch(() => {});
             });
         }).catch(() => {});
+
+        // 回传确认
+        if (replyPort) replyPort.postMessage({ ok: true });
+
     } else if (event.data.type === 'GET_CONFIG') {
         // 查询当前配置，通过 MessageChannel 返回
-        const port = event.ports && event.ports[0];
-        if (port) {
-            port.postMessage({
+        if (replyPort) {
+            replyPort.postMessage({
                 strategy: strategy,
                 decodeDepth: decodeDepth,
-                slashExtraDecoding: slashExtraDecoding
+                slashExtraDecoding: slashExtraDecoding,
+                urlTemplate: urlTemplate
             });
         }
     }
@@ -287,6 +306,21 @@ self.addEventListener('fetch', event => {
         return;
     }
     if (new URL(urlStr).origin !== self.location.origin) {
+        return;
+    }
+    
+    // 预取缓存命中（307 跟随请求）
+    if (_prefetchCache.has(urlStr)) {
+        const promise = _prefetchCache.get(urlStr);
+        _prefetchCache.delete(urlStr);
+        event.respondWith((async () => {
+            try {
+                return await promise;
+            } catch (e) {
+                console.error('[SW] Prefetch failed, fallback:', e);
+                return fetch(event.request);
+            }
+        })());
         return;
     }
     

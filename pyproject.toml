@@ -32,11 +32,6 @@ include = [
 
 [dependency-groups]
 dev = [
-    "jupyter-server-proxy>=4.4.0",
-    "jupyterlab>=4.5.1",
-    # JupyterLab 扩展构建依赖（用于 --no-isolation 快速构建）
     "build>=1.0.0",
     "hatchling>=1.5.0",
-    "hatch-nodejs-version>=0.3.2",
-    "hatch-jupyter-builder>=0.5",
 ]

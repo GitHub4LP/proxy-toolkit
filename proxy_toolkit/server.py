@@ -10,10 +10,16 @@ import time
 from collections import OrderedDict
 from typing import Dict, Optional
 
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 from aiohttp import web
 
-from .port_proxy import detect_service_config, generate_proxy_url
+try:
+    from .port_proxy import detect_service_config, generate_proxy_url
+except ImportError:
+    from port_proxy import detect_service_config, generate_proxy_url
 
 
 def get_available_port():
@@ -173,7 +179,7 @@ class PortServer:
                 content_type="application/javascript",
                 headers={
                     "Service-Worker-Allowed": "/",
-                    "Cache-Control": "no-cache"
+                    "Cache-Control": "no-store"
                 }
             )
         except FileNotFoundError:
@@ -348,7 +354,9 @@ class PortServer:
             return False
 
     def _get_port_process(self, port: int) -> Optional[Dict]:
-        """获取监听端口的进程信息"""
+        """获取监听端口的进程信息（best-effort，非本机服务返回 None）"""
+        if psutil is None:
+            return None
         try:
             for conn in psutil.net_connections(kind="inet"):
                 if (
@@ -360,7 +368,6 @@ class PortServer:
                     try:
                         process = psutil.Process(conn.pid)
                         cmdline = process.cmdline()
-                        # 将命令行参数列表合并为字符串
                         cmdline_str = ' '.join(cmdline) if cmdline else process.name()
                         
                         return {
@@ -402,27 +409,26 @@ class PortServer:
 
 
 def check_subpath_requirement():
-    """检查是否需要启动Service Worker服务"""
+    """检测子路径环境（仅日志，不阻止启动）"""
     from urllib.parse import urlparse
-    
+
     proxy_template = detect_service_config()
-    
+
     if not proxy_template:
-        print("[跳过] 未检测到代理环境")
+        print("[检测] 未检测到代理环境，可手动配置模板")
         return False
-    
+
     # 提取路径部分
     if proxy_template.startswith(("http://", "https://")):
         parsed = urlparse(proxy_template)
         template_path = parsed.path
     else:
         template_path = proxy_template
-    
-    # 判断是否为根路径
+
     if template_path in ["/", ""]:
-        print("[跳过] 根路径环境")
+        print("[检测] 根路径环境，可手动配置模板")
         return False
-    
+
     print(f"[检测] 子路径环境: {template_path}")
     return True
 
@@ -437,12 +443,8 @@ async def main():
     parser.add_argument("--port", type=int, help="监听端口 (默认系统分配)")
     args = parser.parse_args()
 
-    # 检查是否需要启动服务
-    needs_service = check_subpath_requirement()
-    
-    if not needs_service:
-        print("[跳过] 无需启动服务")
-        return
+    # 检测环境（仅日志，始终启动）
+    check_subpath_requirement()
 
     server = PortServer(args.host, args.port)
     runner = None

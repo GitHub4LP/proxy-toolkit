@@ -189,13 +189,36 @@
    * @param {ServiceWorker} worker - SW 实例
    * @param {object} config - {strategy, decodeDepth, slashExtraDecoding}
    */
-  function configureServiceWorker(worker, config) {
-    worker.postMessage({
-      type: 'CONFIGURE',
-      data: {
-        strategy: config.strategy || 'none',
-        decodeDepth: config.decodeDepth || 0,
-        slashExtraDecoding: config.slashExtraDecoding || false
+  function configureServiceWorker(worker, config, timeout = 5000) {
+    return new Promise((resolve) => {
+      const channel = new MessageChannel();
+
+      const timer = setTimeout(() => resolve(false), timeout);
+
+      channel.port1.onmessage = (event) => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+
+      channel.port1.onmessageerror = () => {
+        clearTimeout(timer);
+        resolve(false);
+      };
+
+      try {
+        worker.postMessage({
+          type: 'CONFIGURE',
+          data: {
+            strategy: config.strategy || 'none',
+            decodeDepth: config.decodeDepth || 0,
+            slashExtraDecoding: config.slashExtraDecoding || false,
+            urlTemplate: config.urlTemplate || ''
+          }
+        }, [channel.port2]);
+      } catch (err) {
+        clearTimeout(timer);
+        console.warn('[SW Client] Failed to configure:', err);
+        resolve(false);
       }
     });
   }

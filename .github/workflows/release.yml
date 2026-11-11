@@ -20,11 +20,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-      
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -36,41 +31,14 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --group dev
       
-      # ==================== 核心包 (proxy-toolkit) ====================
       - name: Build proxy-toolkit wheel
         run: uv run python -m build --wheel --no-isolation
       
-      # ==================== VS Code 扩展 ====================
-      - name: Build VS Code Extension
-        working-directory: vscode-proxy-toolkit
-        run: |
-          npm install
-          npm run build
-          npm run package
-      
-      # ==================== JupyterLab 扩展 ====================
-      - name: Build JupyterLab Extension (frontend)
-        working-directory: jupyterlab-proxy-toolkit
-        run: |
-          npm install
-          npm run prebuild
-          npm run build:lib:prod
-      
-      - name: Build JupyterLab labextension
-        run: uv run jupyter labextension build jupyterlab-proxy-toolkit
-      
-      - name: Build JupyterLab Extension (wheel)
-        run: uv run python -m build jupyterlab-proxy-toolkit --wheel --no-isolation
-      
-      # ==================== 发布 ====================
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: |
-            dist/*.whl
-            vscode-proxy-toolkit/*.vsix
-            jupyterlab-proxy-toolkit/dist/*.whl
+          files: dist/*.whl
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
